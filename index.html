@@ -59,7 +59,6 @@
       word-wrap: break-word;
       display: none;
     }
-	
   </style>
 </head>
 <body>
@@ -100,7 +99,7 @@
     scene.add(hemisphereLight);
     scene.add(directionalLight);
 
-    // Waypoint configuration (you can still use different colors per type if desired)
+    // Waypoint configuration (colors can vary if you like)
     const waypointConfig = {
       turn: {
         color: 0xff0000
@@ -116,6 +115,7 @@
       }
     };
 
+    // Fetch waypoints from the server
     async function loadWaypoints() {
       const routeId = new URLSearchParams(window.location.search).get('routeId');
       if (!routeId) {
@@ -134,65 +134,62 @@
       }
     }
 
+    // Calculate the distance (in meters) between two lat/lng pairs
     function calculateDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371000; // Earth's radius in meters
+      const R = 6371000; // Earth’s radius in meters
       const φ1 = lat1 * Math.PI / 180;
       const φ2 = lat2 * Math.PI / 180;
       const Δφ = (lat2 - lat1) * Math.PI / 180;
       const Δλ = (lon2 - lon1) * Math.PI / 180;
 
       const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-               Math.cos(φ1) * Math.cos(φ2) *
-               Math.sin(Δλ/2) * Math.sin(Δλ/2);
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
       
       return R * c; // Distance in meters
     }
 
-    function calculateRelativePosition(lat1, lon1, lat2, lon2) {
-      if (!lat1 || !lon1 || !lat2 || !lon2) {
+    // Calculate position relative to a reference lat/lng
+    function calculateRelativePosition(refLat, refLng, lat, lng) {
+      if (refLat == null || refLng == null || lat == null || lng == null) {
         log("Invalid coordinates provided");
         return { x: 0, z: 0, distance: 0 };
       }
 
       const R = 6371000;
-      const φ1 = lat1 * Math.PI / 180;
-      const φ2 = lat2 * Math.PI / 180;
-      const Δφ = (lat2 - lat1) * Math.PI / 180;
-      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      const φ1 = refLat * Math.PI / 180;
+      const φ2 = lat * Math.PI / 180;
+      const Δφ = (lat - refLat) * Math.PI / 180;
+      const Δλ = (lng - refLng) * Math.PI / 180;
 
       // z-direction from delta in latitude
       const z = Math.sin(Δφ) * R;
       // x-direction from delta in longitude
       const x = Math.cos(φ1) * Math.sin(Δλ) * R;
-      const distance = calculateDistance(lat1, lon1, lat2, lon2);
+      const distance = calculateDistance(refLat, refLng, lat, lng);
 
       return { x, z, distance };
     }
 
-    
+    // Create a 3D box representing a path segment
     function createPathSegment(start, end, color = 0x00ff00) {
-      // Calculate the difference
+      // Calculate difference in x and z
       const dx = end.x - start.x;
       const dz = end.z - start.z;
       const distance = Math.sqrt(dx * dx + dz * dz);
 
-      // Create a box geometry that represents the path segment:
-      //   length  = distance between start and end
-      //   height  = a small thickness, e.g. 0.02
-      //   width   = how “wide” you want the path to be
+      // Box geometry representing the path segment
       const geometry = new THREE.BoxGeometry(distance, 1, 1);
       const material = new THREE.MeshStandardMaterial({ color });
-
       const segment = new THREE.Mesh(geometry, material);
 
-      // Position the segment at the midpoint between start and end
+      // Midpoint for positioning
       const midpointX = start.x + dx / 2;
       const midpointZ = start.z + dz / 2;
       segment.position.set(midpointX, 0, midpointZ);
 
-      
-      // We compute the angle and rotate around Y.
+      // Rotate around Y axis
       const angle = Math.atan2(dz, dx);
       segment.rotation.y = -angle;
 
@@ -205,73 +202,47 @@
       debug.textContent = '';
 
       try {
+        // 1. Get device’s current location
+        const devicePosition = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true
+          });
+        });
+        const deviceLat = devicePosition.coords.latitude;
+        const deviceLng = devicePosition.coords.longitude;
+        log(`Device location: lat=${deviceLat}, lng=${deviceLng}`);
+
+        // 2. Load waypoints from server
         const waypoints = await loadWaypoints();
         if (!waypoints || waypoints.length === 0) {
           throw new Error('No waypoints found');
         }
-
         log(`Total waypoints from server: ${waypoints.length}`);
-        
-        // Minimal distance-based filtering (similar to your original logic):
-        const filteredWaypoints = waypoints.filter((wp, index) => {
-          if (!wp.lat || !wp.lng) return false;
-          if (index === 0) return true; // keep first
-          if (index === waypoints.length - 1) return true; // keep last
 
-          const prevWp = waypoints[index - 1];
-          const distance = calculateDistance(
-            prevWp.lat, prevWp.lng,
-            wp.lat, wp.lng
-          );
+        // 3. **No filtering**: use all waypoints as-is
+        const allWaypoints = waypoints;
+        log(`Using all waypoints (count = ${allWaypoints.length})`);
 
-          // Keep if more than 0.5m away or if it’s a special type
-          if (distance > 0.5) return true;
-          if (wp.type === 'turn' || wp.type === 'turn_warning') return true;
-          return false;
-        });
-
-        log(`Filtered down to ${filteredWaypoints.length} waypoints`);
-        console.log("Filtered waypoints:", filteredWaypoints);
-
-        // Compute positions relative to the first waypoint
-        const positions = [];
-        let firstWaypoint = null;
-        filteredWaypoints.forEach((wp, index) => {
-          if (wp && wp.lat && wp.lng) {
-            if (!firstWaypoint) {
-              firstWaypoint = wp;
-              positions.push({ x: 0, z: 0 });
-            } else {
-              const pos = calculateRelativePosition(
-                firstWaypoint.lat, firstWaypoint.lng,
-                wp.lat, wp.lng
-              );
-              positions.push(pos);
-            }
+        // 4. Compute positions relative to the device's location
+        const positions = allWaypoints.map((wp) => {
+          if (!wp.lat || !wp.lng) {
+            return { x: 0, z: 0 };
           }
+          return calculateRelativePosition(deviceLat, deviceLng, wp.lat, wp.lng);
         });
 
-        // Scale down so they are not too far apart in the AR space
+        // 5. Scale down so they're not too far apart in AR space
         const scale = 0.1;
-        const markerPoints = positions.map((pos, idx) => {
-          console.log(
-            `Filtered WP #${idx}, lat: ${filteredWaypoints[idx]?.lat}, ` +
-            `lng: ${filteredWaypoints[idx]?.lng}, x: ${pos.x}, z: ${pos.z}`
-          );
-          return {
-            x: pos.x * scale,
-            z: pos.z * scale
-          };
-        });
+        const markerPoints = positions.map(pos => ({
+          x: pos.x * scale,
+          z: pos.z * scale
+        }));
 
-        // Create path segments for consecutive waypoints
+        // 6. Create path segments for consecutive waypoints
         let segmentsCreated = 0;
         for (let i = 0; i < markerPoints.length - 1; i++) {
-          // Optionally pick a color based on the type of the “starting” waypoint
-          const wpType = filteredWaypoints[i]?.type;
+          const wpType = allWaypoints[i]?.type;
           const config = waypointConfig[wpType] || waypointConfig.default;
-          
-          // Create a thick horizontal line from markerPoints[i] to markerPoints[i+1]
           const segment = createPathSegment(
             markerPoints[i],
             markerPoints[i + 1],
@@ -281,9 +252,8 @@
           segmentsCreated++;
         }
 
-        log(`Created ${segmentsCreated} thick path segments`);
+        log(`Created ${segmentsCreated} path segments`);
         loadingElement.style.display = 'none';
-
       } catch (error) {
         log(`Error in initWaypoints: ${error.message}`);
         loadingElement.textContent = `Error: ${error.message}`;
@@ -295,7 +265,6 @@
         if (!('xr' in navigator)) {
           throw new Error('WebXR not supported in this browser');
         }
-
         const isSupported = await navigator.xr.isSessionSupported('immersive-ar');
         if (!isSupported) {
           throw new Error('AR not supported on this device');
@@ -317,14 +286,14 @@
       }
     }
 
-    // Event listeners
+    // Button event
     document.getElementById("enter-ar").addEventListener("click", async () => {
       await startAR();
       await initWaypoints();
       document.getElementById("enter-ar").style.display = "none";
     });
 
-    // Only update size if not in XR mode
+    // Handle window resize if not in XR
     window.addEventListener("resize", () => {
       if (!renderer.xr.isPresenting) {
         camera.aspect = window.innerWidth / window.innerHeight;
@@ -333,6 +302,5 @@
       }
     });
   </script>
-  
 </body>
 </html>
