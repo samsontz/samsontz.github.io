@@ -99,7 +99,7 @@
     scene.add(hemisphereLight);
     scene.add(directionalLight);
 
-    // Waypoint configuration (colors can vary if you like)
+    // Waypoint configuration
     const waypointConfig = {
       turn: {
         color: 0xff0000
@@ -219,7 +219,7 @@
         }
         log(`Total waypoints from server: ${waypoints.length}`);
 
-        // 3. **No filtering**: use all waypoints as-is
+        // 3. Use all waypoints as-is
         const allWaypoints = waypoints;
         log(`Using all waypoints (count = ${allWaypoints.length})`);
 
@@ -231,14 +231,21 @@
           return calculateRelativePosition(deviceLat, deviceLng, wp.lat, wp.lng);
         });
 
-        // 5. Scale down so they're not too far apart in AR space
+        // 5. Scale down + invert z so they appear in front of the camera
         const scale = 0.1;
-        const markerPoints = positions.map(pos => ({
+        let markerPoints = positions.map(pos => ({
           x: pos.x * scale,
-          z: pos.z * scale
+          z: -pos.z * scale  // Negative so "forward" is in front of the camera
         }));
 
-        // 6. Create path segments for consecutive waypoints
+        // 6. Shift so the first waypoint is at camera origin (0, 0)
+        const firstPoint = markerPoints[0];
+        for (let i = 0; i < markerPoints.length; i++) {
+          markerPoints[i].x -= firstPoint.x;
+          markerPoints[i].z -= firstPoint.z;
+        }
+
+        // 7. Create path segments for consecutive waypoints
         let segmentsCreated = 0;
         for (let i = 0; i < markerPoints.length - 1; i++) {
           const wpType = allWaypoints[i]?.type;
