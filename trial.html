@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>AR GPS Waypoints Navigation</title>
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+    <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js"></script>
+    <script>
+      AFRAME.registerComponent('waypoints-manager', {
+        init: function() {
+          this.loadWaypoints();
+          this.addDebugInfo();
+        },
+        getRouteId: function() {
+          const urlParams = new URLSearchParams(window.location.search);
+          return urlParams.get('routeId');
+        },
+        loadWaypoints: function() {
+          const routeId = this.getRouteId();
+          if (!routeId) {
+            console.error('No routeId provided in URL');
+            return;
+          }
+          const waypointsUrl = https://waypoints-prht.onrender.com/get-waypoints/${routeId};
+          fetch(waypointsUrl)
+            .then(response => response.json())
+            .then(waypoints => {
+              console.log('Fetched waypoints:', waypoints);
+              if (waypoints.length === 0) {
+                console.warn('No waypoints received from the server');
+              }
+              waypoints.forEach((waypoint, index) => {
+                if (!waypoint.lat || !waypoint.lng) {
+                  console.error(Invalid coordinates for waypoint ${index + 1});
+                  return;
+                }
+                const text = document.createElement('a-text');
+                text.setAttribute('value', Point ${index + 1});
+                text.setAttribute('scale', '75 75 75');
+                text.setAttribute('align', 'center');
+                text.setAttribute('color', this.getColorForIndex(index));
+                text.setAttribute('look-at', '[gps-camera]');
+                text.setAttribute('gps-entity-place', latitude: ${waypoint.lat}; longitude: ${waypoint.lng});
+                this.el.sceneEl.appendChild(text);
+                console.log(Added waypoint ${index + 1}: lat ${waypoint.lat}, lon ${waypoint.lng});
+              });
+            })
+            .catch(error => console.error('Error fetching waypoints:', error));
+        },
+        getColorForIndex: function(index) {
+          const colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange'];
+          return colors[index % colors.length];
+        },
+        addDebugInfo: function() {
+          const debugDiv = document.createElement('div');
+          debugDiv.setAttribute('id', 'debug-info');
+          debugDiv.style.position = 'absolute';
+          debugDiv.style.top = '10px';
+          debugDiv.style.left = '10px';
+          debugDiv.style.backgroundColor = 'rgba(0,0,0,0.7)';
+          debugDiv.style.color = 'white';
+          debugDiv.style.padding = '10px';
+          debugDiv.style.fontFamily = 'monospace';
+          debugDiv.style.zIndex = '9999';
+          document.body.appendChild(debugDiv);
+
+          const updateDebugInfo = () => {
+            if ('geolocation' in navigator) {
+              navigator.geolocation.getCurrentPosition((position) => {
+                debugDiv.innerHTML = `
+                  RouteId: ${this.getRouteId() || 'Not provided'}<br>
+                  Lat: ${position.coords.latitude.toFixed(6)}<br>
+                  Lon: ${position.coords.longitude.toFixed(6)}<br>
+                  Accuracy: ${position.coords.accuracy.toFixed(2)}m<br>
+                  Orientation: ${screen.orientation ? screen.orientation.type : 'N/A'}
+                `;
+              }, (error) => {
+                debugDiv.innerHTML = Geolocation error: ${error.message};
+              }, {
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 27000,
+              });
+            } else {
+              debugDiv.innerHTML = 'Geolocation is not supported';
+            }
+          };
+
+          updateDebugInfo();
+          setInterval(updateDebugInfo, 5000);
+        }
+      });
+    </script>
+  </head>
+  <body style="margin: 0; overflow: hidden;">
+    <a-scene
+      embedded
+      loading-screen="enabled: false;"
+      arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
+      vr-mode-ui="enabled: false"
+      waypoints-manager
+    > 
+      <a-camera gps-camera rotation-reader></a-camera>
+    </a-scene>
+  </body>
+</html>
