@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AR Navigation with Plane Detection</title>
-  <!-- Three.js & Import Map -->
+  <title>AR Navigation (Modified)</title>
   <script type="importmap">
     {
       "imports": {
@@ -14,29 +13,62 @@
     }
   </script>
   <style>
-    body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
-    #enter-ar {
-      position: absolute; top: 10px; left: 10px; z-index: 999;
-      padding: 12px 24px; background: #007bff; color: white;
-      border: none; border-radius: 4px; cursor: pointer; font-size: 16px;
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
     }
-    #enter-ar:hover { background: #0056b3; }
-
+    #enter-ar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 999;
+      padding: 12px 24px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    #enter-ar:hover {
+      background: #0056b3;
+    }
     #loading {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      background: rgba(0,0,0,0.8); color: white; padding: 20px;
-      border-radius: 8px; display: none; text-align: center;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      display: none;
+      text-align: center;
     }
     #debug {
-      position: absolute; bottom: 10px; left: 10px;
-      background: rgba(0,0,0,0.7); color: white; padding: 10px;
-      font-size: 12px; border-radius: 4px; max-width: 80%;
-      word-wrap: break-word; display: none;
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      font-size: 12px;
+      border-radius: 4px;
+      max-width: 80%;
+      word-wrap: break-word;
+      display: none;
     }
     #orientation {
-      position: absolute; top: 10px; right: 10px;
-      background: rgba(0,0,0,0.7); color: white; padding: 10px;
-      font-size: 14px; border-radius: 4px; display: none;
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      font-size: 14px;
+      border-radius: 4px;
+      display: none;
     }
   </style>
 </head>
@@ -50,9 +82,7 @@
     import * as THREE from 'three';
     import { ARButton } from 'three/addons/webxr/ARButton.js';
 
-    // --------------------------------------------------------------------
-    // Basic scene + renderer setup
-    // --------------------------------------------------------------------
+    // Main scene, camera, renderer
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -61,128 +91,111 @@
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
 
-    // Lighting
+    // Debug elements
+    const debugEl = document.getElementById('debug');
+    const orientationDisplay = document.getElementById('orientation');
+    
+    function log(message) {
+      console.log(message);
+      debugEl.textContent += message + '\n';
+      debugEl.style.display = 'block';
+    }
+
+    // Simple lighting
     scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(0, 10, 0);
     scene.add(directionalLight);
 
-    // Debug UI
-    const debug = document.getElementById('debug');
-    const orientationDisplay = document.getElementById('orientation');
-    function log(message) {
-      console.log(message);
-      debug.textContent += message + '\n';
-      debug.style.display = 'block';
+    // --------------------------------------------------
+    // 3D Objects / Models
+    // --------------------------------------------------
+
+    // 1) 3D arrow object (pointing forward)
+    //    We'll use a simple ConeGeometry plus a small cylinder as a "stem".
+    function createDirectionArrow() {
+      const group = new THREE.Group();
+
+      // Arrow tip
+      const coneGeom = new THREE.ConeGeometry(0.1, 0.3, 8);
+      const coneMat = new THREE.MeshStandardMaterial({ color: 0x00ff00, emissive: 0x00ff00, emissiveIntensity: 0.4 });
+      const cone = new THREE.Mesh(coneGeom, coneMat);
+      cone.position.y = 0.25; // Lift the cone tip above the "stem"
+      group.add(cone);
+
+      // Arrow stem
+      const stemGeom = new THREE.CylinderGeometry(0.03, 0.03, 0.4, 8);
+      const stemMat = new THREE.MeshStandardMaterial({ color: 0x006600, emissive: 0x006600, emissiveIntensity: 0.4 });
+      const stem = new THREE.Mesh(stemGeom, stemMat);
+      stem.position.y = 0.05;
+      group.add(stem);
+
+      // The arrow points "up" the Y axis by default; rotate so it points forward along Z.
+      group.rotation.x = Math.PI / 2;
+
+      return group;
     }
 
-    // --------------------------------------------------------------------
-    // Global variables for device orientation and plane anchoring
-    // --------------------------------------------------------------------
-    let headingOffset = 0;   // We'll store (event.alpha - 90 + 360) % 360
-    let reticle = null;      // A small ring to visualize plane detection
-    let hasPlaced = false;   // Whether we've already placed the route
-    let anchorGroup = null;  // A group anchored to the detected plane
-    let waypointsGroup = null; // Holds all navigation cues (arrows, marker, etc.)
-
-    // --------------------------------------------------------------------
-    // 1) Listen for device orientation & fix offset so 0° = North
-    // --------------------------------------------------------------------
-    if (window.DeviceOrientationEvent) {
-      window.addEventListener('deviceorientation', (event) => {
-        if (event.alpha === null) return;
-        // Typical offset: if phone facing North yields alpha ~ 90
-        // We'll shift so that physically facing North => headingOffset = 0
-        headingOffset = (event.alpha - 90 + 360) % 360;
-
-        orientationDisplay.textContent = `Heading: ${Math.round(headingOffset)}°`;
-        orientationDisplay.style.display = 'block';
-      });
-    }
-
-    // --------------------------------------------------------------------
-    // 2) Create your “road arrow” & “destination marker” code
-    //    (same as in your example)
-    // --------------------------------------------------------------------
-    function createRoadArrow() {
-      const shape = new THREE.Shape();
-      shape.moveTo(-0.5, -0.5);
-      shape.lineTo(0, 0.5);
-      shape.lineTo(0.5, -0.5);
-      shape.lineTo(-0.5, -0.5);
-
-      const geometry = new THREE.ShapeGeometry(shape);
-      const material = new THREE.MeshStandardMaterial({
-        color: 0xffff00,
-        transparent: true,
-        opacity: 0.9,
-        emissive: 0xffff00,
-        emissiveIntensity: 0.5,
-        side: THREE.DoubleSide
-      });
-
-      const arrow = new THREE.Mesh(geometry, material);
-      arrow.rotation.x = -Math.PI / 2; // Lay flat
-      arrow.scale.set(0.3, 0.3, 0.3);
-      return arrow;
-    }
-
+    // 2) A destination marker (red "pin")
     function createDestinationMarker() {
       const group = new THREE.Group();
-      const pinMat = new THREE.MeshStandardMaterial({
+      
+      // Create pin top
+      const pinTopGeometry = new THREE.CylinderGeometry(0.4, 0.3, 0.6, 6); // hex cylinder
+      const pinMaterial = new THREE.MeshStandardMaterial({
         color: 0xb01020,
         emissive: 0xb01020,
         emissiveIntensity: 0.3
       });
-      // Pin top (hex cylinder)
-      const pinTopGeo = new THREE.CylinderGeometry(0.4, 0.3, 0.6, 6);
-      const pinTop = new THREE.Mesh(pinTopGeo, pinMat);
-      group.add(pinTop);
+      const pinTop = new THREE.Mesh(pinTopGeometry, pinMaterial);
 
-      // White hex inside
-      const hexGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 6);
-      const hexMat = new THREE.MeshStandardMaterial({
+      // Inner hex (white)
+      const hexGeometry = new THREE.CylinderGeometry(0.15, 0.15, 0.1, 6);
+      const hexMaterial = new THREE.MeshStandardMaterial({
         color: 0xffffff,
         emissive: 0xffffff,
         emissiveIntensity: 0.3
       });
-      const hexInner = new THREE.Mesh(hexGeo, hexMat);
-      hexInner.position.y = 0.31;
-      group.add(hexInner);
+      const hexInner = new THREE.Mesh(hexGeometry, hexMaterial);
+      hexInner.position.y = 0.31; // top of pin
 
-      // Pin point (cone)
-      const pinPointGeo = new THREE.ConeGeometry(0.1, 0.4, 16);
-      const pinPoint = new THREE.Mesh(pinPointGeo, pinMat);
+      // Pin point
+      const pinPointGeometry = new THREE.ConeGeometry(0.1, 0.4, 16);
+      const pinPoint = new THREE.Mesh(pinPointGeometry, pinMaterial);
       pinPoint.position.y = -0.4;
+
+      group.add(pinTop);
+      group.add(hexInner);
       group.add(pinPoint);
 
-      // Position floating above ground
+      // Raise it a bit
       group.position.y = 1.0;
+
       return group;
     }
 
-    // --------------------------------------------------------------------
-    // 3) Your waypoint logic (fetching from server, filtering, etc.)
-    //    For demonstration, we keep it the same but skip the fetch.
-    //    Instead, we’ll do a small “fake” route. Modify as needed.
-    // --------------------------------------------------------------------
+    // --------------------------------------------------
+    // Geospatial calculations
+    // --------------------------------------------------
+
     function calculateDistance(lat1, lon1, lat2, lon2) {
-      // Earth radius in meters
-      const R = 6371000;
+      const R = 6371000; // earth radius in meters
       const φ1 = lat1 * Math.PI / 180;
       const φ2 = lat2 * Math.PI / 180;
       const Δφ = (lat2 - lat1) * Math.PI / 180;
       const Δλ = (lon2 - lon1) * Math.PI / 180;
 
-      const a = Math.sin(Δφ/2)*Math.sin(Δφ/2) +
-                Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)*Math.sin(Δλ/2);
+      const a = Math.sin(Δφ/2)**2 +
+                Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2)**2;
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
+      return R * c; // meters
     }
 
+    // Relative X,Z offset (in meters) from lat/lon A to lat/lon B
     function calculateRelativePosition(lat1, lon1, lat2, lon2) {
       const R = 6371000;
-      const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+      const φ1 = lat1 * Math.PI / 180;
+      const φ2 = lat2 * Math.PI / 180;
       const Δφ = (lat2 - lat1) * Math.PI / 180;
       const Δλ = (lon2 - lon1) * Math.PI / 180;
 
@@ -191,154 +204,156 @@
       return { x, z };
     }
 
+    // --------------------------------------------------
+    // Waypoints fetching & processing
+    // --------------------------------------------------
+
     async function loadWaypoints() {
-      // Replace with your real fetch if desired.
-      // This is just a mock route: start -> mid -> end
-      return [
-        { lat: 40.0000, lng: -75.0000 },
-        { lat: 40.0001, lng: -74.9999 },
-        { lat: 40.0002, lng: -74.9998 }
-      ];
+      const routeId = new URLSearchParams(window.location.search).get('routeId');
+      if (!routeId) {
+        log("No route ID provided.");
+        return [];
+      }
+      try {
+        // Replace with your real endpoint or keep as example
+        const response = await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${routeId}`);
+        const data = await response.json();
+        log(`Loaded ${data.waypoints?.length || 0} waypoints from server`);
+        return data.waypoints || [];
+      } catch (error) {
+        log(`Error fetching waypoints: ${error.message}`);
+        return [];
+      }
     }
+
+    let filteredWaypoints = [];
+    let waypointPositions = []; // relative positions from the first WP
+    let hasPlacedObjects = false; // to ensure we place objects only once
 
     async function initWaypoints() {
       document.getElementById('loading').style.display = 'block';
-      debug.textContent = '';
+      debugEl.textContent = '';
 
       try {
         const waypoints = await loadWaypoints();
         if (!waypoints.length) throw new Error("No waypoints found");
+
         log(`Total waypoints from server: ${waypoints.length}`);
 
-        // Filter redundant or close points
-        const filteredWaypoints = [];
+        // Filter out waypoints that are too close
+        filteredWaypoints = [];
         let lastPoint = null;
-        waypoints.forEach((wp, i) => {
+
+        waypoints.forEach((wp, index) => {
           if (!wp.lat || !wp.lng) return;
-          if (i === 0 || i === waypoints.length - 1) {
+          
+          if (index === 0 || index === waypoints.length - 1) {
+            // always keep first and last
             filteredWaypoints.push(wp);
             lastPoint = wp;
             return;
           }
+          
           if (!lastPoint) return;
-          const distance = calculateDistance(lastPoint.lat, lastPoint.lng, wp.lat, wp.lng);
-          if (distance > 5) {
+          
+          const dist = calculateDistance(lastPoint.lat, lastPoint.lng, wp.lat, wp.lng);
+          // Only add if >5m from lastPoint
+          if (dist > 5.0) {
             filteredWaypoints.push(wp);
             lastPoint = wp;
           }
         });
+        
         log(`Filtered down to ${filteredWaypoints.length} waypoints`);
-
+        
         const firstWaypoint = filteredWaypoints[0];
-        if (!firstWaypoint?.lat || !firstWaypoint?.lng) {
-          throw new Error("Invalid first waypoint");
-        }
+        if (!firstWaypoint?.lat || !firstWaypoint?.lng) throw new Error("Invalid first waypoint");
 
-        // Calculate relative positions from first waypoint
-        const positions = [];
+        // Calculate relative positions from the first waypoint
+        waypointPositions = [];
         let maxDistance = 0;
+
         filteredWaypoints.forEach((wp) => {
           const pos = calculateRelativePosition(
             firstWaypoint.lat, firstWaypoint.lng,
             wp.lat, wp.lng
           );
-          positions.push(pos);
-          const dist = Math.sqrt(pos.x*pos.x + pos.z*pos.z);
+          waypointPositions.push(pos);
+
+          const dist = Math.sqrt(pos.x**2 + pos.z**2);
           if (dist > maxDistance) maxDistance = dist;
         });
 
-        // A fixed scale factor
-        const scale = 0.1;
+        // Decide on some uniform scale factor
+        let scale = 0.1; // same as original approach
         log(`Using scale factor: ${scale.toFixed(4)} for max distance: ${maxDistance.toFixed(2)}m`);
-
-        // Create a group for all route objects
-        waypointsGroup = new THREE.Group();
-
-        // Destination marker at final waypoint
-        const finalPos = positions[positions.length - 1];
-        const destMarker = createDestinationMarker();
-        destMarker.position.set(finalPos.x * scale, 0, finalPos.z * scale);
-        waypointsGroup.add(destMarker);
-
-        // Road arrows along path
-        for (let i = 0; i < positions.length - 1; i++) {
-          const start = positions[i];
-          const end = positions[i+1];
-          const dx = end.x - start.x;
-          const dz = end.z - start.z;
-          const segLen = Math.sqrt(dx*dx + dz*dz);
-          const angle = Math.atan2(dx, dz);
-
-          const arrowSpacing = 5;  // Place arrow every ~5 meters
-          const numArrows = Math.max(3, Math.floor(segLen / arrowSpacing));
-          for (let j = 0; j < numArrows; j++) {
-            const t = j / numArrows;
-            const arrowX = start.x + dx * t;
-            const arrowZ = start.z + dz * t;
-
-            const arrow = createRoadArrow();
-            arrow.position.set(arrowX * scale, 0.01, arrowZ * scale);
-            arrow.rotation.y = -angle; // orient arrow
-
-            // Slight scale variation
-            const distanceFactor = 1 + (j / numArrows * 0.5);
-            arrow.scale.set(0.3*distanceFactor, 0.3*distanceFactor, 0.3*distanceFactor);
-
-            waypointsGroup.add(arrow);
-          }
-        }
-
+        
+        // Keep data for later object placement in AR
         document.getElementById('loading').style.display = 'none';
-      } catch (err) {
-        log(`Error: ${err.message}`);
-        document.getElementById('loading').textContent = `Error: ${err.message}`;
+      } catch (error) {
+        log(`Error initializing waypoints: ${error.message}`);
+        document.getElementById('loading').textContent = `Error: ${error.message}`;
       }
     }
 
-    // --------------------------------------------------------------------
-    // 4) Start AR: request plane detection (“hit-test”),
-    //    place all navigation cues on the first plane we detect
-    // --------------------------------------------------------------------
+    // --------------------------------------------------
+    // AR Session and placing objects
+    // --------------------------------------------------
+
+    // A reticle for ground plane detection
+    let reticle;
+    
+    // We'll store the camera's initial AR transform once
+    let cameraStartMatrix = new THREE.Matrix4();
+    let cameraStartMatrixInv = new THREE.Matrix4();
+    let hasCameraStartPose = false;
+
     async function startAR() {
       try {
-        if (!('xr' in navigator)) throw new Error("WebXR not supported");
-        const supported = await navigator.xr.isSessionSupported('immersive-ar');
-        if (!supported) throw new Error("AR not supported on this device");
+        if (!('xr' in navigator)) {
+          throw new Error("WebXR not supported in this browser");
+        }
+        const isSupported = await navigator.xr.isSessionSupported('immersive-ar');
+        if (!isSupported) {
+          throw new Error("AR not supported on this device");
+        }
 
-        // Build AR button for plane detection
-        const arButton = ARButton.createButton(renderer, {
-          requiredFeatures: ['hit-test'],
-          optionalFeatures: ['dom-overlay'],
-          domOverlay: { root: document.body }
-        });
-        document.body.appendChild(arButton);
-
-        // A ring geometry to show where the plane is found
+        // Create a reticle for hit-test
         reticle = new THREE.Mesh(
           new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-          new THREE.MeshBasicMaterial({ color: 0xffffff })
+          new THREE.MeshBasicMaterial()
         );
         reticle.visible = false;
         scene.add(reticle);
 
+        // Add ARButton for "hit-test"
+        const arButton = ARButton.createButton(renderer, { 
+          requiredFeatures: ['hit-test'], 
+          optionalFeatures: ['dom-overlay'], 
+          domOverlay: { root: document.body } 
+        });
+        document.body.appendChild(arButton);
+
+        // Hit test sources
         let hitTestSource = null;
         let hitTestSourceRequested = false;
 
         renderer.xr.addEventListener('sessionstart', () => {
-          log("AR session started");
-        });
-        renderer.xr.addEventListener('sessionend', () => {
-          log("AR session ended");
-          hitTestSourceRequested = false;
-          hitTestSource = null;
-          hasPlaced = false;
+          log('AR session started');
         });
 
-        // We render in a loop
-        renderer.setAnimationLoop((timestamp, frame) => {
+        renderer.xr.addEventListener('sessionend', () => {
+          log('AR session ended');
+          hitTestSourceRequested = false;
+          hitTestSource = null;
+          hasCameraStartPose = false;
+        });
+
+        // The main AR animation loop
+        renderer.setAnimationLoop((time, frame) => {
           if (frame) {
-            const session = renderer.xr.getSession();
             if (!hitTestSourceRequested) {
+              const session = renderer.xr.getSession();
               session.requestReferenceSpace('viewer').then((refSpace) => {
                 session.requestHitTestSource({ space: refSpace }).then((source) => {
                   hitTestSource = source;
@@ -351,61 +366,120 @@
               hitTestSourceRequested = true;
             }
 
+            // Acquire camera’s pose, used for offset if not set
+            const refSpace = renderer.xr.getReferenceSpace();
+            const pose = frame.getViewerPose(refSpace);
+            if (pose && !hasCameraStartPose) {
+              // Store the camera's initial transform as the origin
+              camera.matrix.fromArray(pose.views[0].transform.matrix);
+              cameraStartMatrix.copy(camera.matrix);
+              cameraStartMatrixInv.copy(cameraStartMatrix).invert();
+              hasCameraStartPose = true;
+              log('Camera start pose captured. Placing objects...');
+              
+              // Once we have the camera pose, place all waypoints
+              placeWaypointsInScene();
+            }
+
+            // Perform the hit test for reticle
             if (hitTestSource) {
-              const refSpace = renderer.xr.getReferenceSpace();
               const hitTestResults = frame.getHitTestResults(hitTestSource);
               if (hitTestResults.length) {
                 const hit = hitTestResults[0];
                 reticle.visible = true;
                 reticle.matrix.fromArray(hit.getPose(refSpace).transform.matrix);
-
-                // Place the route objects once on the first plane we find
-                if (!hasPlaced && waypointsGroup) {
-                  anchorGroup = new THREE.Group();
-                  anchorGroup.matrixAutoUpdate = false;
-                  anchorGroup.matrix.fromArray(hit.getPose(refSpace).transform.matrix);
-                  scene.add(anchorGroup);
-
-                  // If you want to rotate the entire route so that
-                  // "forward" in your route = real-world North:
-                  // anchorGroup.rotation.y = THREE.Math.degToRad(-headingOffset);
-
-                  anchorGroup.add(waypointsGroup);
-                  waypointsGroup.position.set(0, 0, 0);
-
-                  hasPlaced = true;
-                  log("Navigation cues anchored to plane");
-                }
-
-                // If you want it to keep tracking the plane, you could update
-                // anchorGroup’s matrix every frame. Typically, we do not if we
-                // only want a one-time placement.
               } else {
                 reticle.visible = false;
               }
             }
           }
+
           renderer.render(scene, camera);
         });
-
       } catch (err) {
         log(`AR Error: ${err.message}`);
         alert(`AR Error: ${err.message}`);
       }
     }
 
-    // --------------------------------------------------------------------
-    // 5) Hook up buttons & events
-    // --------------------------------------------------------------------
+    // Once we have the initial camera pose, place all waypoints in the scene
+    // so that the user's start position/orientation is treated as origin.
+    function placeWaypointsInScene() {
+      if (hasPlacedObjects) return; // do not place multiple times
+      hasPlacedObjects = true;
+
+      // Clear old objects (keep lights, reticle)
+      scene.children = scene.children.filter(child =>
+        child === directionalLight ||
+        child === reticle ||
+        child.type === 'HemisphereLight'
+      );
+
+      // Place the final waypoint's marker
+      const finalPos = waypointPositions[waypointPositions.length - 1];
+      const destMarker = createDestinationMarker();
+      // Scale factor as used in initWaypoints
+      const scale = 0.1;
+      destMarker.position.set(finalPos.x * scale, 0, finalPos.z * scale);
+      applyCameraOffset(destMarker);
+      scene.add(destMarker);
+
+      // Create three arrows ONLY at each corner (any WP that is NOT first or last)
+      for (let i = 1; i < waypointPositions.length - 1; i++) {
+        const cornerPos = waypointPositions[i];
+        // direction angle from this corner to the next
+        const nextPos = waypointPositions[i + 1];
+        const dx = nextPos.x - cornerPos.x;
+        const dz = nextPos.z - cornerPos.z;
+        const angle = Math.atan2(dx, dz);
+
+        // Place 3 arrows in a small cluster
+        for (let k = 0; k < 3; k++) {
+          const arrow = createDirectionArrow();
+          arrow.position.set(
+            cornerPos.x * scale,
+            0.01 + k * 0.05, // stack them slightly up so they're visible
+            cornerPos.z * scale
+          );
+          arrow.rotation.y = -angle; // face direction of next segment
+          
+          // Apply the camera's offset so arrow is correctly placed in AR
+          applyCameraOffset(arrow);
+          scene.add(arrow);
+        }
+      }
+
+      // Set up orientation display
+      if (window.DeviceOrientationEvent) {
+        window.addEventListener('deviceorientation', function(e) {
+          if (e.alpha !== null) {
+            orientationDisplay.textContent = `Heading: ${Math.round(e.alpha)}°`;
+            orientationDisplay.style.display = 'block';
+          }
+        });
+      }
+    }
+
+    // Apply the inverse of the camera's start matrix so that
+    // the user’s initial position becomes (0,0,0) in the scene.
+    function applyCameraOffset(obj) {
+      obj.applyMatrix4(cameraStartMatrixInv);
+    }
+
+    // --------------------------------------------------
+    // Event Listeners
+    // --------------------------------------------------
+
     document.getElementById("enter-ar").addEventListener("click", async () => {
-      // Start the AR session
+      // Start AR session
       await startAR();
-      // Load the waypoints so the group is ready to be anchored
+      // Load / filter waypoints
       await initWaypoints();
+
+      // Hide the button after starting
       document.getElementById("enter-ar").style.display = "none";
     });
 
-    // Handle window resizing
     window.addEventListener("resize", () => {
       if (!renderer.xr.isPresenting) {
         camera.aspect = window.innerWidth / window.innerHeight;
