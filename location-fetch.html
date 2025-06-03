@@ -1,27 +1,47 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <meta charset="utf-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <title>Location-based AR.js demo</title>
-    <script src="https://aframe.io/releases/1.0.4/aframe.min.js"></script>
-    <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
-    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js"></script>
-  </head>
+    <meta charset="utf-8">
+    <title>Dynamic waypoints</title>
 
-  <body style="margin: 0; overflow: hidden;">
-    <a-scene
-      vr-mode-ui="enabled: false"
-      embedded
-      arjs="sourceType: webcam; debugUIEnabled: false;"
-    >
-      <a-text
-        value="This content will always face you."
-        look-at="[gps-camera]"
-        scale="50 50 50"
-        gps-entity-place="latitude: -6.8135; longitude: 39.2686;"
-      ></a-text>
-      <a-camera gps-camera rotation-reader> </a-camera>
+    <!-- bumped A-Frame to 1.4.0 to match other files -->
+    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/jeromeetienne/AR.js/3.4.0/aframe/build/aframe-ar.js"></script>
+  </head>
+  <body style="margin:0">
+    <a-scene embedded arjs="sourceType: webcam;" vr-mode-ui="enabled: false">
+      <a-assets>
+        <a-asset-item id="pin" src="https://cdn.glitch.global/18fc4bd4-5e0e-45b5-87f3-5df2ac141c98/pin.glb"></a-asset-item>
+      </a-assets>
+
+      <!-- JavaScript component that fetches and injects entities -->
+      <script>
+        AFRAME.registerComponent('waypoint-fetcher', {
+          async init () {
+            const routeId = new URLSearchParams(location.search).get('routeId') || 'demo';
+            const url     = `https://waypoints-prht.onrender.com/get-waypoints/${routeId}`;
+
+            try {
+              const res  = await fetch(url);
+              const data = await res.json();
+
+              (data.waypoints || []).forEach((wp, i) => {
+                const marker = document.createElement('a-entity');
+                marker.setAttribute('gltf-model', '#pin');
+                marker.setAttribute('scale', '3 3 3');
+                marker.setAttribute('gps-entity-place', `latitude: ${wp.lat}; longitude: ${wp.lng}`);
+                marker.setAttribute('look-at', '[gps-camera]');
+                this.el.appendChild(marker);
+              });
+            } catch (err) {
+              console.error(err);
+            }
+          }
+        });
+      </script>
+
+      <a-entity waypoint-fetcher></a-entity>
+      <a-camera gps-camera rotation-reader></a-camera>
     </a-scene>
   </body>
 </html>

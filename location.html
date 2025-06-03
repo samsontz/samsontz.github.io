@@ -1,38 +1,36 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <title>WebXR AR with GPS</title>
+  <head>
+    <meta charset="utf-8">
+    <title>A-Frame + GPS demo</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-    <script src="https://cdn.rawgit.com/jeromeetienne/AR.js/1.7.2/aframe/build/aframe-ar.min.js"></script>
-</head>
-<body style="margin: 0; overflow: hidden;">
-    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false;">
-        <!-- GPS Entities -->
+    <script src="https://raw.githack.com/jeromeetienne/AR.js/3.4.0/aframe/build/aframe-ar.js"></script>
+  </head>
+  <body style="margin:0;overflow:hidden">
+    <a-scene
+      embedded
+      arjs="sourceType: webcam; debugUIEnabled: false"
+      vr-mode-ui="enabled: false"
+      renderer="logarithmicDepthBuffer: true">
+      
+      <!-- Waypoint #1 -->
+      <a-box color="red"  depth="1" height="1" width="1"
+             gps-entity-place="latitude: 37.7749; longitude: -122.4194"></a-box>
 
-        <a-entity gps-entity-place="latitude: -6.764960; longitude: 39.215068">
-            <a-box color="blue" scale="2 2 2"></a-box>
-        </a-entity>
-        
-        <a-entity gps-entity-place="latitude: -6.765700000000001; longitude: 39.214650000000006">
-            <a-box color="blue" scale="2 2 2"></a-box>
-        </a-entity>
+      <!-- Waypoint #2 -->
+      <a-box color="blue" depth="1" height="1" width="1"
+             gps-entity-place="latitude: 37.7751; longitude: -122.4182"></a-box>
 
-        <a-entity gps-entity-place="latitude: -6.76658; longitude: 39.21445000000001">
-            <a-box color="green" scale="2 2 2"></a-box>
-        </a-entity>
+      <!-- Waypoint #3 -->
+      <a-box color="green" depth="1" height="1" width="1"
+             gps-entity-place="latitude: 37.7753; longitude: -122.4170"></a-box>
 
-        <a-entity gps-entity-place="latitude: -6.7666; longitude: 39.21399">
-            <a-box color="yellow" scale="2 2 2"></a-box>
-        </a-entity>
+      <!-- Waypoint #4 -->
+      <a-box color="yellow" depth="1" height="1" width="1"
+             gps-entity-place="latitude: 37.7756; longitude: -122.4155"></a-box>
 
-        <a-entity gps-entity-place="latitude: -6.7666; longitude: 39.21399" >
-            <a-box color="yellow" scale="2 2 2"></a-box>
-        </a-entity>
-
-        <!-- Destination Marker -->
-        <a-entity gps-entity-place="latitude: -6.7666; longitude: 39.21399">
-            <a-box color="red" scale="3 3 3"></a-box>
-        </a-entity>
+      <!-- GPS-aware camera (added) -->
+      <a-camera gps-camera rotation-reader></a-camera>
     </a-scene>
-</body>
+  </body>
 </html>
