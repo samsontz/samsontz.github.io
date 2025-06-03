@@ -5,31 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AR Navigation Demo</title>
 
-  <!-- ─── Import maps for Three.js ─────────────────────────────── -->
+  <!-- ─── Import map for Three.js ────────────────────────────── -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.155.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.155.0/examples/jsm/"
+      "three": "https://unpkg.com/three@0.155.0/build/three.module.js"
     }
   }
   </script>
 
   <style>
-    html,body{margin:0;height:100%;overflow:hidden;font-family:sans-serif;background:#000;}
-    #enter-ar{
-      position:fixed;left:50%;bottom:2rem;transform:translateX(-50%);
-      padding:.8rem 1.4rem;font-size:1rem;border:none;border-radius:8px;
-      background:#ff4060;color:#fff;cursor:pointer;z-index:10;
+    html,body { margin:0; height:100%; overflow:hidden; background:#000; font-family:sans-serif; }
+    #enter-ar {
+      position:fixed; left:50%; bottom:2rem; transform:translateX(-50%);
+      padding:.8rem 1.4rem; font-size:1rem; border:none; border-radius:8px;
+      background:#ff4060; color:#fff; cursor:pointer; z-index:10;
     }
-    #loading,#debug,#orientation{
-      position:fixed;left:0;right:0;padding:.3rem .8rem;
-      font-size:.85rem;background:rgba(0,0,0,.55);color:#0f0;pointer-events:none;
-      white-space:pre-wrap;word-break:break-word;font-family:monospace;
+    #loading,#debug,#orientation {
+      position:fixed; left:0; right:0; padding:.3rem .8rem;
+      font-size:.85rem; background:rgba(0,0,0,.55); color:#0f0; pointer-events:none;
+      white-space:pre-wrap; word-break:break-word; font-family:monospace;
     }
-    #loading{top:0;text-align:center;background:#222;color:#fff}
-    #debug{bottom:0;max-height:40%;overflow:auto;display:none;}
-    #orientation{top:2.2rem;text-align:center;}
+    #loading { top:0; text-align:center; background:#222; color:#fff; }
+    #debug   { bottom:0; max-height:40%; overflow:auto; display:none; }
+    #orientation { top:2.2rem; text-align:center; }
   </style>
 </head>
 <body>
@@ -43,33 +42,26 @@
        Imports & renderer / camera boiler-plate
     ────────────────────────────────────────────────────────── */
     import * as THREE from 'three';
-    import { ARButton } from 'three/addons/webxr/ARButton.js';
 
-    const scene   = new THREE.Scene();
-    const camera  = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const scene    = new THREE.Scene();
+    const camera   = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 20);
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
     renderer.xr.enabled = true;
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(devicePixelRatio);
     document.body.appendChild(renderer.domElement);
 
     /* Lights */
     scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
     const dirLight = new THREE.DirectionalLight(0xffffff, .8);
-    dirLight.position.set(0, 5, 3);
+    dirLight.position.set(0,5,3);
     scene.add(dirLight);
 
     /* Debug helper */
-    const debugEl = document.getElementById('debug');
-    function log(msg){
-      console.log(msg);
-      debugEl.textContent += msg + '\n';
-      debugEl.style.display = 'block';
-    }
+    const dbg = document.getElementById('debug');
+    function log(msg){ console.log(msg); dbg.textContent += msg+'\n'; dbg.style.display='block'; }
 
-    /* ──────────────────────────────────────────────────────────
-       Helper – build a flat chevron arrow that points forward
-    ────────────────────────────────────────────────────────── */
+    /* ---------- Geometry creators ---------- */
     function createRoadArrow(){
       const shape = new THREE.Shape()
         .moveTo( 0, 0.6)
@@ -79,91 +71,87 @@
         .lineTo( 0, 0.6);
       const geometry = new THREE.ShapeGeometry(shape);
       geometry.rotateX(-Math.PI/2);
-      const material = new THREE.MeshStandardMaterial({ color: 0xff2255, roughness: .5, metalness: .1 });
+      const material = new THREE.MeshStandardMaterial({ color:0xff2255, roughness:.5, metalness:.1 });
       return new THREE.Mesh(geometry, material);
     }
 
-    /* Destination pin */
     function createDestinationMarker(){
-      const geometry = new THREE.ConeGeometry(0.25, 0.4, 32);
-      geometry.translate(0, -0.2, 0);
-      geometry.rotateX(Math.PI);
-      const material = new THREE.MeshStandardMaterial({ color: 0xff2255 });
-      const cone = new THREE.Mesh(geometry, material);
-      const ring = new THREE.RingGeometry(0.27, 0.3, 32);
-      ring.rotateX(-Math.PI/2);
-      const ringMat = new THREE.MeshStandardMaterial({ color: 0xff2255, side: THREE.DoubleSide });
-      const ringMesh = new THREE.Mesh(ring, ringMat);
-      const group = new THREE.Group();
-      group.add(cone, ringMesh);
-      return group;
+      const coneGeo = new THREE.ConeGeometry(0.25, 0.4, 32);
+      coneGeo.translate(0,-0.2,0).rotateX(Math.PI);
+      const coneMat = new THREE.MeshStandardMaterial({ color:0xff2255 });
+      const cone    = new THREE.Mesh(coneGeo, coneMat);
+
+      const ringGeo = new THREE.RingGeometry(0.27, 0.3, 32).rotateX(-Math.PI/2);
+      const ringMat = new THREE.MeshStandardMaterial({ color:0xff2255, side:THREE.DoubleSide });
+      const ring    = new THREE.Mesh(ringGeo, ringMat);
+
+      const grp = new THREE.Group();
+      grp.add(cone, ring);
+      return grp;
     }
 
-    /* ──────────────────────────────────────────────────────────
-       Waypoint loading + placement
-    ────────────────────────────────────────────────────────── */
+    /* ---------- Waypoint helpers ---------- */
     async function loadWaypoints(){
-      const routeId = new URLSearchParams(location.search).get('routeId');
-      if(!routeId){ log('⚠ No routeId param in URL'); return []; }
-
+      const id = new URLSearchParams(location.search).get('routeId');
+      if(!id){ log('⚠ No routeId param in URL'); return []; }
       try{
-        const res  = await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${routeId}`);
+        const res  = await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${id}`);
         const data = await res.json();
         log(`Loaded ${data.waypoints?.length || 0} waypoints`);
         return data.waypoints || [];
-      }catch(err){
-        log(`Fetch error: ${err.message}`);
-        return [];
-      }
+      }catch(e){ log('Fetch error: '+e.message); return []; }
     }
 
-    function addWaypointsToScene(waypoints){
-      /* Clear previous (leave lights) */
+    function addWaypointsToScene(wps){
+      /* Clear previous meshes except lights */
       scene.children.slice().forEach(obj=>{
         if(!['HemisphereLight','DirectionalLight'].includes(obj.type)) scene.remove(obj);
       });
-
-      waypoints.forEach((wp,i)=>{
-        const obj = i === waypoints.length-1 ? createDestinationMarker() : createRoadArrow();
-        /* distribute them roughly every 1.5 m in Z just for demo purposes */
-        obj.position.set(0, 0, -1.5 * i - 2);
-        scene.add(obj);
+      wps.forEach((wp,i)=>{
+        const mesh = (i === wps.length-1) ? createDestinationMarker() : createRoadArrow();
+        mesh.position.set(0,0,-1.5*i-2);  // demo placement
+        scene.add(mesh);
       });
     }
 
     /* ──────────────────────────────────────────────────────────
-       AR session boot-strap
+       New startAR(): requests the session itself
     ────────────────────────────────────────────────────────── */
-    let reticle;
     async function startAR(){
-      if(!('xr' in navigator)) throw Error('WebXR not supported in this browser.');
+      /* Capability checks */
+      if(!navigator.xr) throw Error('WebXR not supported in this browser.');
       if(!(await navigator.xr.isSessionSupported('immersive-ar')))
-        throw Error('This device / browser does not support immersive-ar.');
+        throw Error('Device/browser lacks “immersive-ar” support.');
+
+      /* Request session (prompts the user) */
+      const sessionInit = {
+        requiredFeatures:['hit-test'],
+        optionalFeatures:['dom-overlay'],
+        domOverlay:{ root:document.body }
+      };
+      const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+
+      /* Hand over to Three.js */
+      renderer.xr.setSession(session);
 
       /* Reticle */
-      reticle = new THREE.Mesh(
+      const reticle = new THREE.Mesh(
         new THREE.RingGeometry(0.15,0.2,32).rotateX(-Math.PI/2),
-        new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent:true, opacity:.6 })
+        new THREE.MeshBasicMaterial({ color:0x00ffff, opacity:.6, transparent:true })
       );
       scene.add(reticle); reticle.visible = false;
 
-      /* Hide the default ARButton, keep our custom button */
-      const hiddenBtn = ARButton.createButton(renderer, {
-        requiredFeatures: ['hit-test'],
-        optionalFeatures: ['dom-overlay'],
-        domOverlay: { root: document.body }
-      });
-      hiddenBtn.style.display = 'none';
+      /* Hit-test setup */
+      const viewerSpace   = await session.requestReferenceSpace('viewer');
+      const hitTestSource = await session.requestHitTestSource({ space:viewerSpace });
 
-      /* Hit-test loop */
       const controller = renderer.xr.getController(0);
-      controller.addEventListener('select', () => {
+      controller.addEventListener('select', ()=>{
         if(reticle.visible){
-          /* Pin entire waypoint group at reticle */
-          const offset = reticle.matrix.clone();
-          scene.children.forEach(obj=>{
-            if(obj !== reticle && obj.type !== 'HemisphereLight' && obj.type !== 'DirectionalLight'){
-              obj.applyMatrix4(offset);
+          const mat = reticle.matrix.clone();
+          scene.traverse(obj=>{
+            if(obj !== reticle && !['HemisphereLight','DirectionalLight'].includes(obj.type)){
+              obj.applyMatrix4(mat);
             }
           });
           reticle.visible = false;
@@ -171,18 +159,15 @@
       });
       scene.add(controller);
 
-      const session = renderer.xr.getSession();
-      const viewerRefSpace = await session.requestReferenceSpace('viewer');
-      const hitTestSource  = await session.requestHitTestSource({ space: viewerRefSpace });
-
+      /* Render loop */
       renderer.setAnimationLoop((t,frame)=>{
         if(frame){
           const refSpace = renderer.xr.getReferenceSpace();
           const hits = frame.getHitTestResults(hitTestSource);
           if(hits.length){
-            const hitPose = hits[0].getPose(refSpace);
+            const pose = hits[0].getPose(refSpace);
             reticle.visible = true;
-            reticle.matrix.fromArray(hitPose.transform.matrix);
+            reticle.matrix.fromArray(pose.transform.matrix);
             reticle.matrix.decompose(reticle.position, reticle.quaternion, reticle.scale);
           }else{
             reticle.visible = false;
@@ -192,9 +177,7 @@
       });
     }
 
-    /* ──────────────────────────────────────────────────────────
-       Initialise once the user presses the button
-    ────────────────────────────────────────────────────────── */
+    /* ---------- User gesture boot-strap ---------- */
     document.getElementById('enter-ar').addEventListener('click', async ()=>{
       try{
         await startAR();
@@ -202,16 +185,14 @@
         addWaypointsToScene(wps);
         document.getElementById('enter-ar').style.display = 'none';
         document.getElementById('loading').style.display  = 'none';
-      }catch(err){
-        log(err.message);
-      }
+      }catch(e){ log(e.message); }
     });
 
-    /* Resize */
+    /* ---------- Resize ---------- */
     window.addEventListener('resize', ()=>{
-      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setSize(innerWidth, innerHeight);
     });
   </script>
 </body>
