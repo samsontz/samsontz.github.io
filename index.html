@@ -5,87 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AR Navigation</title>
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      overflow: hidden;
-      font-family: system-ui, -apple-system, Arial, sans-serif;
+    :root {
+      --bg-glass: rgba(0,0,0,0.45);
+      --txt-light: #fff;
+      --txt-accent: #0ff;
     }
-    #xr-canvas {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      touch-action: none;
-    }
-    #toolbar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      padding: 8px;
-      backdrop-filter: blur(6px);
-      background: rgba(0, 0, 0, 0.4);
-      color: #fff;
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      z-index: 10;
-    }
-    button {
-      padding: 6px 12px;
-      font-size: 16px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-    #guidance {
-      position: fixed;
-      bottom: 10%;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 0, 0, 0.6);
-      color: #fff;
-      padding: 8px 16px;
-      border-radius: 10px;
-      font-size: 18px;
-      z-index: 10;
-    }
-    #distanceRemaining,
-    #timeRemaining {
-      position: fixed;
-      top: 40px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 0, 0, 0.4);
-      color: #fff;
-      padding: 4px 8px;
-      border-radius: 6px;
-      font-size: 16px;
-      z-index: 10;
-    }
-    #timeRemaining {
-      top: 70px;
-    }
-    #nextTurn {
-      position: fixed;
-      top: 40px;
-      right: 10px;
-      background: rgba(0, 0, 0, 0.4);
-      color: #fff;
-      padding: 4px 8px;
-      border-radius: 6px;
-      font-size: 16px;
-      z-index: 10;
-    }
+    html,body{margin:0;padding:0;height:100%;overflow:hidden;font-family:system-ui,-apple-system,Arial,sans-serif;color:var(--txt-light);}
+    #xr-canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;}
+    .overlay{position:fixed;left:0;right:0;z-index:10;pointer-events:none;}
+    #toolbar{top:0;display:flex;gap:.5rem;align-items:center;padding:.5rem 1rem;background:var(--bg-glass);backdrop-filter:blur(6px);}
+    #toolbar button{pointer-events:auto;border:none;padding:.4rem .8rem;border-radius:.5rem;background:var(--txt-accent);color:#000;font-weight:600;cursor:pointer;}
+    #status{flex:1;text-align:center;font-size:.9rem;font-weight:500;}
+
+    /* Heads‑up display always on */
+    #hud{top:2.8rem;display:flex;justify-content:space-between;align-items:flex-start;padding:0 1rem;pointer-events:none;}
+    #topCenter{font-size:1.25rem;font-weight:600;text-shadow:0 0 6px #000;}
+    #topRight{font-size:1.25rem;font-weight:600;text-shadow:0 0 6px #000;}
+    #guidance{bottom:1.5rem;left:50%;transform:translateX(-50%);max-width:90%;padding:.75rem 1rem;background:var(--bg-glass);border-radius:1rem;font-size:1.1rem;text-align:center;backdrop-filter:blur(8px);}
   </style>
+  <!-- Three.js import map -->
   <script type="importmap">
     {
       "imports": {
         "three": "https://unpkg.com/three@0.155.0/build/three.module.js",
-        "three/examples/": "https://unpkg.com/three@0.155.0/examples/"
+        "three/addons/": "https://unpkg.com/three@0.155.0/examples/jsm/"
       }
     }
   </script>
@@ -93,342 +36,90 @@
 <body>
   <canvas id="xr-canvas"></canvas>
 
-  <div id="toolbar">
+  <!-- Toolbar -->
+  <div id="toolbar" class="overlay">
     <button id="startBtn" disabled>Start AR Navigation</button>
-    <button id="stopBtn" style="display: none">Stop Navigation</button>
-    <span id="status">Initializing…</span>
+    <button id="stopBtn" hidden>Stop Navigation</button>
+    <span id="status">Initializing GPS…</span>
   </div>
 
-  <div id="guidance" hidden></div>
-  <div id="distanceRemaining"></div>
-  <div id="timeRemaining"></div>
-  <div id="nextTurn"></div>
+  <!-- Always‑visible HUD (distance, ETA, next turn) -->
+  <div id="hud" class="overlay">
+    <div id="topCenter"><span id="distanceText">-- m</span> • <span id="etaText">-- min</span></div>
+    <div id="topRight"><span id="turnText">—</span></div>
+  </div>
+
+  <!-- Guidance banner -->
+  <div id="guidance" class="overlay" hidden></div>
 
   <script type="module">
     import * as THREE from 'three';
-    import { XRButton } from 'three/examples/jsm/webxr/XRButton.js';
+    import { XRButton } from 'three/addons/webxr/XRButton.js';
 
+    /***  Constants & DOM refs  ***/
     const R_EARTH = 6378137; // metres, WGS‑84
-    const DEG2RAD = Math.PI / 180;
+    const DEG2RAD = Math.PI/180;
+    const WALK_H_MPS = 1.4; // assumed walking speed
 
-    let renderer, scene, camera, worldRoot;
-    let xrSession = null;
+    const canvas = document.getElementById('xr-canvas');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn  = document.getElementById('stopBtn');
+    const statusEl = document.getElementById('status');
+    const guidanceEl = document.getElementById('guidance');
+    const distanceEl = document.getElementById('distanceText');
+    const etaEl = document.getElementById('etaText');
+    const turnEl = document.getElementById('turnText');
+
+    /***  Three.js scene  ***/
+    const renderer = new THREE.WebGLRenderer({canvas,alpha:true,antialias:true});
+    renderer.xr.enabled = true;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    const worldRoot = new THREE.Group();
+    scene.add(worldRoot);
+    scene.add(new THREE.HemisphereLight(0xffffff,0x444444,1));
+
+    /***  Route & state  ***/
+    let originLLA = null;               // first averaged fix
+    let userLLA = null;                 // live, smoothed
+    let waypointsLLA = [];              // [{lat,lng,alt}]
+    let waypointsENU = [];              // THREE.Vector3 list
+    let nextWpIdx = 1;                  // index of upcoming waypoint
+    let lineMesh = null;
+
+    /***  Heading  ***/
     let headingDeg = 0;
     let headingAtXRStart = null;
 
-    const statusEl = document.getElementById('status');
-    const guideEl = document.getElementById('guidance');
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const distanceEl = document.getElementById('distanceRemaining');
-    const timeEl = document.getElementById('timeRemaining');
-    const nextTurnEl = document.getElementById('nextTurn');
-
-    let originLLA = null;
-    let userLLA = null;
-    let userENU = null;
-    let waypointsLLA = []; // lat/lng/alt objects
-    let waypointsENU = []; // THREE.Vector3 list
-    let nextWpIdx = 1; // index of the next waypoint (0 is always user)
-    let lineMesh = null;
-
-    // ────────────────────────────────────────────────────────────
-    //  THREE INITIALISATION
-    // ────────────────────────────────────────────────────────────
-    function initThree() {
-      const canvas = document.getElementById('xr-canvas');
-      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-      renderer.xr.enabled = true;
-
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera();
-      scene.add(camera);
-
-      worldRoot = new THREE.Group();
-      scene.add(worldRoot);
-
-      const hemisphere = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
-      scene.add(hemisphere);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  COORDINATE UTILITIES
-    // ────────────────────────────────────────────────────────────
-    function llaToENU({ lat, lng, alt }) {
+    /***  Utility functions  ***/
+    const llaToENU = ({lat,lng,alt=0})=>{
       const dLat = (lat - originLLA.lat) * DEG2RAD;
       const dLon = (lng - originLLA.lng) * DEG2RAD;
-      const east = dLon * Math.cos(originLLA.lat * DEG2RAD) * R_EARTH;
+      const east  = dLon * Math.cos(originLLA.lat*DEG2RAD) * R_EARTH;
       const north = dLat * R_EARTH;
-      const up = (alt ?? 0) - originLLA.alt;
-      // Three.js: X → east, Y → up, Z → north
+      const up    = alt - originLLA.alt;
       return new THREE.Vector3(east, up, north);
-    }
+    };
 
-    function haversineDistance(a, b) {
-      const dLat = (b.lat - a.lat) * DEG2RAD;
-      const dLon = (b.lng - a.lng) * DEG2RAD;
-      const lat1 = a.lat * DEG2RAD,
-        lat2 = b.lat * DEG2RAD;
-      const h =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-      return 2 * R_EARTH * Math.asin(Math.sqrt(h));
-    }
+    const haversineDistance = (a,b)=>{
+      const dLat = (b.lat-a.lat)*DEG2RAD;
+      const dLon = (b.lng-a.lng)*DEG2RAD;
+      const lat1=a.lat*DEG2RAD, lat2=b.lat*DEG2RAD;
+      const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+      return 2*R_EARTH*Math.asin(Math.sqrt(h));
+    };
 
-    function bearingDeg(a, b) {
-      const lat1 = a.lat * DEG2RAD,
-        lat2 = b.lat * DEG2RAD;
-      const dLon = (b.lng - a.lng) * DEG2RAD;
-      const y = Math.sin(dLon) * Math.cos(lat2);
-      const x =
-        Math.cos(lat1) * Math.sin(lat2) -
-        Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-      return (Math.atan2(y, x) * 180) / Math.PI + 360 % 360;
-    }
+    const bearingDeg = (a,b)=>{
+      const lat1=a.lat*DEG2RAD, lat2=b.lat*DEG2RAD;
+      const dLon=(b.lng-a.lng)*DEG2RAD;
+      const y=Math.sin(dLon)*Math.cos(lat2);
+      const x=Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLon);
+      return (Math.atan2(y,x)*180/Math.PI+360)%360;
+    };
 
-    const compassPoints = [
-      'north',
-      'north‑east',
-      'east',
-      'south‑east',
-      'south',
-      'south‑west',
-      'west',
-      'north‑west',
-    ];
-    function bearingToCompass(brg) {
-      return compassPoints[Math.round(brg / 45) % 8];
-    }
+    const compassPoints=['north','north‑east','east','south‑east','south','south‑west','west','north‑west'];
+    const bearingToCompass = brg => compassPoints[Math.round(brg/45)%8];
 
-    // ────────────────────────────────────────────────────────────
-    //  GEOLOCATION
-    // ────────────────────────────────────────────────────────────
-    function startGeolocation() {
-      const fixes = [];
-      navigator.geolocation.watchPosition(
-        (pos) => {
-          const { latitude, longitude, altitude } = pos.coords;
-          fixes.push({ lat: latitude, lng: longitude, alt: altitude ?? 0 });
-          if (fixes.length > 3) fixes.shift();
-
-          const avg = fixes.reduce(
-            (acc, c) => ({
-              lat: acc.lat + c.lat,
-              lng: acc.lng + c.lng,
-              alt: acc.alt + c.alt,
-            }),
-            { lat: 0, lng: 0, alt: 0 }
-          );
-          avg.lat /= fixes.length;
-          avg.lng /= fixes.length;
-          avg.alt /= fixes.length;
-
-          if (!originLLA) {
-            originLLA = { ...avg };
-            userLLA = { ...avg };
-            initRoute();
-          } else {
-            userLLA = { ...avg };
-          }
-          userENU = llaToENU(userLLA);
-          if (lineMesh) {
-            const posAttr = lineMesh.geometry.getAttribute('position');
-            posAttr.setXYZ(0, userENU.x, userENU.y, userENU.z);
-            posAttr.needsUpdate = true;
-          }
-          updateGuidance();
-        },
-        (err) => {
-          statusEl.textContent = 'GPS error: ' + err.message;
-        },
-        { enableHighAccuracy: true, maximumAge: 1000, timeout: 6000 }
-      );
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  ROUTE + POLYLINE
-    // ────────────────────────────────────────────────────────────
-    async function fetchWaypointsFromServer(origin) {
-      // TODO: Replace this stub with real API call
-      // For demo, return two points ~50 m east, then ~50 m north‑east
-      return [
-        { ...origin },
-        { lat: origin.lat, lng: origin.lng + 0.00045, alt: origin.alt },
-        { lat: origin.lat + 0.00045, lng: origin.lng + 0.00045, alt: origin.alt },
-      ];
-    }
-
-    async function initRoute() {
-      statusEl.textContent = 'Fetching route…';
-      waypointsLLA = await fetchWaypointsFromServer(originLLA);
-      waypointsENU = waypointsLLA.map(llaToENU);
-      rebuildPolyline();
-      statusEl.textContent = `Route ready (${waypointsLLA.length - 1} waypoints). Start AR when ready.`;
-      startBtn.disabled = false;
-      guideEl.hidden = false;
-      updateGuidance();
-    }
-
-    function rebuildPolyline() {
-      if (lineMesh) {
-        worldRoot.remove(lineMesh);
-        lineMesh.geometry.dispose();
-      }
-      if (waypointsENU.length < 2) return;
-
-      const positions = [];
-      for (const v of waypointsENU) positions.push(v.x, v.y, v.z);
-
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-
-      const mat = new THREE.LineDashedMaterial({
-        color: 0xff00ff,
-        dashSize: 0.5,
-        gapSize: 0.25,
-        linewidth: 5,
-        transparent: true,
-        opacity: 0.85,
-      });
-      const line = new THREE.Line(geom, mat);
-      line.computeLineDistances();
-      lineMesh = line;
-      worldRoot.add(lineMesh);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  GUIDANCE LOGIC
-    // ────────────────────────────────────────────────────────────
-    function computeRemainingDistance() {
-      if (!userLLA) return 0;
-      const lastIdx = waypointsLLA.length - 1;
-      return haversineDistance(userLLA, waypointsLLA[lastIdx]);
-    }
-
-    function updateGuidance() {
-      if (nextWpIdx >= waypointsLLA.length) {
-        guideEl.innerText = 'Destination reached ✅';
-        startBtn.disabled = true;
-        distanceEl.textContent = '';
-        timeEl.textContent = '';
-        nextTurnEl.textContent = '';
-        return;
-      }
-
-      const target = waypointsLLA[nextWpIdx];
-      const dist = haversineDistance(userLLA, target);
-      const brg = bearingDeg(userLLA, target);
-      guideEl.innerText = `Head ${bearingToCompass(brg)} for ${Math.round(dist)} m`;
-
-      if (dist < 5) {
-        nextWpIdx++;
-        if (nextWpIdx >= waypointsLLA.length) {
-          guideEl.innerText = 'Destination reached ✅';
-          return;
-        } else {
-          guideEl.innerText = 'Waypoint reached! Continue…';
-        }
-      }
-
-      const remaining = computeRemainingDistance();
-      distanceEl.textContent = `${Math.round(remaining)} m remaining`;
-      const ETA = remaining / 1.4; // assume 1.4 m/s walking speed
-      timeEl.textContent = `~${Math.round(ETA / 60)} min`;
-
-      // Next‑turn indicator
-      if (nextWpIdx + 1 < waypointsLLA.length) {
-        const incoming = bearingDeg(
-          waypointsLLA[nextWpIdx - 1],
-          waypointsLLA[nextWpIdx]
-        );
-        const outgoing = bearingDeg(
-          waypointsLLA[nextWpIdx],
-          waypointsLLA[nextWpIdx + 1]
-        );
-        const delta = (outgoing - incoming + 360) % 360;
-        let instr = 'Straight';
-        if (delta < 45) instr = 'Straight';
-        else if (delta < 135) instr = 'Right';
-        else if (delta > 225 && delta < 315) instr = 'Left';
-        else instr = 'Turn around';
-        nextTurnEl.textContent = `${instr} in ${Math.round(dist)} m`;
-      } else {
-        nextTurnEl.textContent = '';
-      }
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  DEVICE ORIENTATION
-    // ────────────────────────────────────────────────────────────
-    function onDeviceOrientation(e) {
-      if (e.webkitCompassHeading !== undefined) {
-        headingDeg = e.webkitCompassHeading; // iOS
-      } else if (e.absolute && e.alpha !== null) {
-        headingDeg = (360 - e.alpha) % 360; // convert alpha → compass heading
-      }
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  WEBXR CONTROL FLOW
-    // ────────────────────────────────────────────────────────────
-    function startXR() {
-      if (!navigator.xr) {
-        alert('WebXR not supported on this device/browser.');
-        return;
-      }
-      navigator.xr
-        .requestSession('immersive-ar', { requiredFeatures: ['local-floor'] })
-        .then((session) => {
-          xrSession = session;
-          renderer.xr.setReferenceSpaceType('local-floor');
-          renderer.xr.setSession(session);
-          headingAtXRStart = headingDeg;
-          session.requestAnimationFrame(onXRFrame);
-          startBtn.style.display = 'none';
-          stopBtn.style.display = 'inline-block';
-          statusEl.textContent = 'AR session active';
-        });
-    }
-
-    function stopXR() {
-      if (xrSession) {
-        xrSession.end();
-        xrSession = null;
-      }
-      startBtn.style.display = 'inline-block';
-      stopBtn.style.display = 'none';
-      statusEl.textContent = 'Session ended';
-    }
-
-    function onXRFrame(time, frame) {
-      xrSession.requestAnimationFrame(onXRFrame);
-
-      if (headingAtXRStart !== null) {
-        const diff = (headingDeg - headingAtXRStart + 360) % 360;
-        worldRoot.rotation.set(0, -THREE.MathUtils.degToRad(diff), 0);
-      }
-
-      renderer.render(scene, camera);
-    }
-
-    // ────────────────────────────────────────────────────────────
-    //  INIT
-    // ────────────────────────────────────────────────────────────
-    function init() {
-      initThree();
-      startGeolocation();
-
-      const orientEvt =
-        'ondeviceorientationabsolute' in window
-          ? 'deviceorientationabsolute'
-          : 'deviceorientation';
-      window.addEventListener(orientEvt, onDeviceOrientation, true);
-
-      startBtn.addEventListener('click', startXR);
-      stopBtn.addEventListener('click', stopXR);
-    }
-
-    init();
-  </script>
-</body>
-</html>
+    /***  Geolocation watcher with simple smoothing  ***/
+    const fixBuf=[];
+    navigator.geolocatio
