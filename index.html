@@ -1,312 +1,214 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta
-    name="viewport"
-    content="width=device-width,initial-scale=1.0">
-  <title>AR Navigation – Real-time Tracking</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AR Navigation & Path Preview</title>
 
-  <!-- Three.js ES-module import map (pinned to a known-good version) -->
+  <!-- Three.js (ES‑modules) -->
   <script type="importmap">
     {
       "imports": {
-        "three":            "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/":    "https://unpkg.com/three@0.160.0/examples/jsm/"
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
       }
     }
-  </script>
-
-  <!-- Google Maps (v = 3-D Maps API) – replace YOUR_API_KEY ↓↓↓ -->
-  <script
-    src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=maps">
   </script>
 
   <style>
-    
-    body{margin:0;overflow:hidden;font-family:system-ui,Avenir,Helvetica,Arial,sans-serif}
-
-    button,select{cursor:pointer;border:none;border-radius:4px;padding:12px 24px;font-size:16px}
-
-    #enter-ar    {position:absolute;top:10px;left:10px;z-index:999;background:#007bff;color:#fff}
-    #enter-ar:hover{background:#0056b3}
-
-    .panel       {position:absolute;background:rgba(0,0,0,.75);color:#fff;padding:10px;border-radius:4px;font-size:12px;display:none}
-    #loading     {top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;font-size:14px}
-    #debug       {bottom:10px;left:10px;max-width:80%;white-space:pre-wrap}
-    #orientation {top:10px;right:10px;font-size:14px}
-    #location-info{top:60px;right:10px}
-
-    /* ------- NEW: map & mode switcher -------- */
-    #modeToggle  {position:absolute;top:10px;right:10px;z-index:1000}
-
-    #mapContainer{position:absolute;left:0;bottom:0;width:100%;height:30%;display:none;pointer-events:auto}
-    body.map-on  #mapContainer {display:block}
-    body.map-only #mapContainer{height:100%}
-
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: system-ui, sans-serif;
+      background: #000;
+    }
+    #info {
+      position: fixed;
+      top: 0;
+      width: 100%;
+      padding: 0.3rem 0.75rem;
+      box-sizing: border-box;
+      text-align: center;
+      color: #fff;
+      background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent);
+      z-index: 2;
+      user-select: none;
+    }
   </style>
 </head>
 <body>
-
-  <button id="enter-ar">Enter AR</button>
-
-  
-  <select id="modeToggle">
-    <option value="fullAR">Full AR</option>
-    <option value="hybrid">AR + 2D</option>
-    <option value="mapOnly">2D only</option>
-  </select>
-
-  
-  <div id="mapContainer"></div>
-
-  <!-- status / debug panels -->
-  <div id="loading"        class="panel">Loading navigation…</div>
-  <div id="debug"          class="panel"></div>
-  <div id="orientation"    class="panel"></div>
-  <div id="location-info"  class="panel"></div>
+  <div id="info">Move the phone – a blue poly‑line always starts at your current position and connects every waypoint.</div>
 
   <script type="module">
-    /* ---------- imports ---------- */
-    import * as THREE     from 'three';
-    import { ARButton }   from 'three/addons/webxr/ARButton.js';
-
-    /* ---------- scene setup ---------- */
-    const scene    = new THREE.Scene();
-    const camera   = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 40);
-    const renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
-    renderer.setPixelRatio(devicePixelRatio);
-    renderer.setSize(innerWidth,innerHeight);
-    renderer.xr.enabled = true;
-    document.body.appendChild(renderer.domElement);
-
-    /* ---------- UI handles ---------- */
-    const debugEl       = document.getElementById('debug');
-    const orientationEl = document.getElementById('orientation');
-    const locationEl    = document.getElementById('location-info');
-    const loadingEl     = document.getElementById('loading');
-    const modeToggle    = document.getElementById('modeToggle');
-
-    const log=(m)=>{console.log(m);debugEl.style.display='block';debugEl.textContent+=m+'\n';};
-    const clearLog = ()=>{debugEl.textContent='';};
+    import * as THREE from 'three';
+    import { ARButton } from 'three/addons/webxr/ARButton.js';
 
     
-    scene.add(new THREE.HemisphereLight(0xffffff,0xbbbbff,1));
-    const dirLight=new THREE.DirectionalLight(0xffffff,0.8);dirLight.position.set(0,10,0);scene.add(dirLight);
+    let camera, scene, renderer;
+    let controller;
+
+    const waypointMeshes = [];        // Arrow + destination meshes
+    let pathLine = null;              // THREE.Line connecting waypoints in 3‑D
+    const pathGeometry = new THREE.BufferGeometry();
+
+    // Dynamic list of Vector3 (first point == phone, others == waypoints)
+    const pathPoints = [];
+
+    // Geographic origin for converting lat/lon → local meters
+    let originLatLon = null;
+
+    // Replace with your server‑side / static list if needed (lat, lon)
+    const WAYPOINTS_GEO = [
+      { lat: 52.520717, lon: 13.409779 }, // sample
+      { lat: 52.520590, lon: 13.410915 },
+      { lat: 52.520404, lon: 13.412292 }
+    ];
 
     
-    let reticle            = null;
-    let currentPosition    = null;             // {lat,lng,heading,accuracy}
-    let watchId            = null;
-    let waypoints          = [];               // full route
-    const arObjects        = [];               // THREE objects for this frame
-    const WORLD_SCALE      = 0.05;             // 1 m IRL → 5 cm in Three units
+    init();
+    animate();
 
-    
-    const EARTH_RADIUS = 6_378_137;            // metres
-    function haversine(lat1,lng1,lat2,lng2){
-      const φ1=THREE.MathUtils.degToRad(lat1), φ2=THREE.MathUtils.degToRad(lat2);
-      const Δφ=THREE.MathUtils.degToRad(lat2-lat1), Δλ=THREE.MathUtils.degToRad(lng2-lng1);
-      const a=Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
-      return EARTH_RADIUS*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
-    }
-    
-    function latLngToOffset(lat1,lng1,lat2,lng2){
-      const φ1=THREE.MathUtils.degToRad(lat1), φ2=THREE.MathUtils.degToRad(lat2);
-      const Δφ=THREE.MathUtils.degToRad(lat2-lat1), Δλ=THREE.MathUtils.degToRad(lng2-lng1);
-      const x = EARTH_RADIUS * Δλ * Math.cos((φ1+φ2)/2); // east-west
-      const z = EARTH_RADIUS * Δφ;                        // north-south
-      return {x,z};
-    }
+    function init() {
+      scene   = new THREE.Scene();
+      camera  = new THREE.PerspectiveCamera();
 
-    
-    function makeArrow(){
-      const g=new THREE.ConeGeometry(0.2,0.4,6), m=new THREE.MeshStandardMaterial({color:0x0099ff});
-      const c=new THREE.Mesh(g,m); g.translate(0,0.2,0); return c;
-    }
-    function makeDestinationMarker(){
-      const g=new THREE.CylinderGeometry(0.15,0.15,0.02,16);
-      const m=new THREE.MeshStandardMaterial({color:0xff4444});
-      return new THREE.Mesh(g,m);
-    }
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
 
-    
-    let gMap=null, gPath=null;
-    function initMiniMap(){
-      gMap = new google.maps.Map(document.getElementById('mapContainer'),{
-        zoom:18, tilt:67, heading:0,
-        mapTypeId:'satellite', mapId:'a3d',
-        center:{lat:currentPosition.lat,lng:currentPosition.lng},
-        disableDefaultUI:true
-      });
-      gPath=new google.maps.Polyline({map:gMap,strokeWeight:6});
-    }
-    function redrawMiniMap(){
-      if(!gMap) return;
-      gMap.setCenter({lat:currentPosition.lat,lng:currentPosition.lng});
-      gMap.setHeading(currentPosition.heading||0);
-      gPath.setPath(waypoints.map(w=>({lat:w.lat,lng:w.lng})));
-    }
-
-    
-    function updateAR(){
-      if(!currentPosition||!waypoints.length) return;
+      document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
 
       
-      arObjects.forEach(o=>{
-        scene.remove(o);
-        o.geometry?.dispose();
-        if(o.material){
-          (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m.dispose());
+      const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.1);
+      scene.add(light);
+
+      
+      controller = renderer.xr.getController(0);
+      scene.add(controller);
+
+      /* Watch geolocation for real‑time phone position */
+      if ('geolocation' in navigator) {
+        navigator.geolocation.watchPosition(onGeo, onGeoError, {
+          enableHighAccuracy: true,
+          maximumAge: 1000,
+          timeout: 5000
+        });
+      } else {
+        document.getElementById('info').textContent = 'Geolocation not supported on this device.';
+      }
+
+      
+    }
+
+    function onGeo(pos) {
+      const { latitude, longitude, accuracy } = pos.coords;
+      if (accuracy > 25) return; // Skip bad samples
+
+      if (!originLatLon) {
+        originLatLon = { lat: latitude, lon: longitude };
+        // Convert static geographic waypoints to local scene coordinates
+        for (const wp of WAYPOINTS_GEO) {
+          pathPoints.push(latLonToLocal(wp.lat, wp.lon));
         }
-      });
-      arObjects.length=0;
-
-      
-      const path = [{lat:currentPosition.lat,lng:currentPosition.lng}, ...waypoints];
-
-      
-      let closestIndex=0, minDist=Infinity;
-      for(let i=0;i<path.length;i++){
-        const d=haversine(currentPosition.lat,currentPosition.lng,path[i].lat,path[i].lng);
-        if(d<minDist){minDist=d;closestIndex=i;}
+        createArrowsAndPath();
       }
-      const ahead=path.slice(closestIndex);   // always ≥1 (starts with phone)
-      if(ahead.length<2) return;              // nothing to draw if only phone
 
-      /* ---- device-centric local coords ---- */
-      const headingRad=THREE.MathUtils.degToRad(currentPosition.heading||0);
-      const cosH=Math.cos(headingRad), sinH=Math.sin(headingRad);
+      // Update first point of path to live phone pose each sample
+      const phoneVec = latLonToLocal(latitude, longitude);
+      if (pathPoints.length) pathPoints[0].copy(phoneVec);
+    }
 
-      const local=ahead.map(w=>{
-        const {x,z}=latLngToOffset(currentPosition.lat,currentPosition.lng,w.lat,w.lng);
-        /* rotate to camera-space & flip Z so “forward” = −Z */
-        return{
-          x:  x*cosH - z*sinH,
-          z: (x*sinH + z*cosH) * -1      // << SIGN FLIP FIXES WRONG-WAY ARROWS
-        };
+    function onGeoError(err) {
+      console.warn('Geolocation error', err);
+    }
+
+    /* Quick equirectangular projection to meters (good enough for < 1 km routes) */
+    function latLonToLocal(lat, lon) {
+      const R = 6378137; // Earth radius in meters
+      const dLat = THREE.MathUtils.degToRad(lat - originLatLon.lat);
+      const dLon = THREE.MathUtils.degToRad(lon - originLatLon.lon);
+      const x = dLon * R * Math.cos(THREE.MathUtils.degToRad((lat + originLatLon.lat) / 2));
+      const z = -dLat * R; // Negative so north ➜ -Z in Three.js
+      return new THREE.Vector3(x, 0, z);
+    }
+
+   
+    function createArrowsAndPath() {
+      // Remove previous arrows / path if they exist
+      waypointMeshes.forEach(m => scene.remove(m));
+      waypointMeshes.length = 0;
+      if (pathLine) scene.remove(pathLine);
+
+      // 1. Create 3‑D path line (blue)
+      updatePathGeometry();
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x0096ff, linewidth: 4 });
+      pathLine = new THREE.Line(pathGeometry, lineMat);
+      scene.add(pathLine);
+
+      // 2. Draw arrows for each segment → look towards next point
+      for (let i = 0; i < pathPoints.length - 1; i++) {
+        const arrow = buildArrowMesh();
+        arrow.position.copy(pathPoints[i]);
+        arrow.lookAt(pathPoints[i + 1]);
+        scene.add(arrow);
+        waypointMeshes.push(arrow);
+      }
+
+      // 3. Destination cylinder at last point
+      const destGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.02, 32);
+      const destMat = new THREE.MeshStandardMaterial({ color: 0xff3942 });
+      const dest = new THREE.Mesh(destGeo, destMat);
+      dest.rotation.x = -Math.PI / 2; // Lay flat
+      dest.position.copy(pathPoints[pathPoints.length - 1]);
+      scene.add(dest);
+      waypointMeshes.push(dest);
+    }
+
+    function buildArrowMesh() {
+      const geo = new THREE.ConeGeometry(0.06, 0.18, 16);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotateX(Math.PI / 2); // Point forward horizontally
+      return mesh;
+    }
+
+    /* Updates or creates buffer‑geometry that stores pathPoints as a poly‑line */
+    function updatePathGeometry() {
+      const arr = new Float32Array(pathPoints.length * 3);
+      pathPoints.forEach((v, idx) => {
+        arr[idx * 3] = v.x; arr[idx * 3 + 1] = v.y; arr[idx * 3 + 2] = v.z;
       });
+      pathGeometry.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+      pathGeometry.computeBoundingSphere();
+    }
 
-      
-      const destLocal = local[local.length-1];
-      const dest = makeDestinationMarker();
-      dest.position.set(destLocal.x*WORLD_SCALE,0,destLocal.z*WORLD_SCALE);
-      scene.add(dest); arObjects.push(dest);
+   
+    function animate() {
+      renderer.setAnimationLoop(render);
+    }
 
-      
-      const ARROW_SPACING = 4;                        // metres
-      for(let i=0;i<local.length-1;i++){
-        const a=local[i], b=local[i+1];
-        const dx=b.x-a.x, dz=b.z-a.z;
-        const segLen=Math.hypot(dx,dz);
-        const steps=Math.max(1,Math.floor(segLen/ARROW_SPACING));
-        const yaw=Math.atan2(dx,dz);                  // travel direction
-        for(let s=0;s<steps;s++){
-          const t=(s+0.5)/steps;
-          const px=(a.x+dx*t)*WORLD_SCALE;
-          const pz=(a.z+dz*t)*WORLD_SCALE;
-          const arrow=makeArrow();
-          arrow.position.set(px,0.05,pz);
-          arrow.rotation.y=-yaw;                      // scene forward = −Z
-          scene.add(arrow); arObjects.push(arrow);
+    function render() {
+      // Update live phone position (camera.world) → first vertex + first arrow
+      if (pathPoints.length) {
+        camera.getWorldPosition(pathPoints[0]);
+        // Update geometry buffer directly for first vertex (0‑based)
+        const posAttr = pathGeometry.attributes.position;
+        posAttr.setXYZ(0, pathPoints[0].x, pathPoints[0].y, pathPoints[0].z);
+        posAttr.needsUpdate = true;
+
+        // Re‑orient first arrow if present
+        if (waypointMeshes.length) {
+          waypointMeshes[0].position.copy(pathPoints[0]);
+          waypointMeshes[0].lookAt(pathPoints[1]);
         }
       }
+
+      renderer.render(scene, camera);
     }
-
-    
-    function startGeolocation(){
-      if(watchId!==null) return;                      // already running
-      if(!navigator.geolocation){log('Geolocation not supported');return;}
-
-      watchId=navigator.geolocation.watchPosition(pos=>{
-        if(pos.coords.accuracy>25){                   // discard bad fixes (>25 m)
-          log(`Ignored inaccurate fix (${pos.coords.accuracy.toFixed(0)} m)`);
-          return;
-        }
-        currentPosition={
-          lat:pos.coords.latitude,
-          lng:pos.coords.longitude,
-          accuracy:pos.coords.accuracy,
-          heading:Number.isFinite(pos.coords.heading)
-                  ?pos.coords.heading
-                  :(currentPosition?.heading??0)
-        };
-        locationEl.innerHTML=
-          `Lat ${currentPosition.lat.toFixed(5)}<br>`+
-          `Lng ${currentPosition.lng.toFixed(5)}<br>`+
-          `Heading ${currentPosition.heading.toFixed(0)}°`;
-        locationEl.style.display='block';
-
-        updateAR();
-        redrawMiniMap();                              // NEW
-      }, err=>log(`Geolocation error: ${err.message}`),
-      {enableHighAccuracy:true,maximumAge:1_000,timeout:10_000});
-    }
-
-    
-    async function initOrientation(){
-      if(typeof DeviceOrientationEvent==='undefined') return;
-      if(DeviceOrientationEvent.requestPermission){
-        try{await DeviceOrientationEvent.requestPermission();}
-        catch{log('Orientation permission denied');}
-      }
-    }
-
-    
-    async function fetchWaypoints(){
-      const routeId=new URLSearchParams(location.search).get('routeId');
-      if(!routeId) throw new Error('No routeId param');
-      const res=await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${routeId}`);
-      const js =await res.json();
-      if(!js.waypoints?.length) throw new Error('No waypoints returned');
-      return js.waypoints.filter(w=>w.lat&&w.lng);
-    }
-
-    
-    modeToggle.addEventListener('change',e=>{
-      const v=e.target.value;
-      document.body.classList.toggle('map-on',  v!=='fullAR');
-      document.body.classList.toggle('map-only',v==='mapOnly');
-      renderer.domElement.style.display = (v==='mapOnly')?'none':'block';
-      if(v!=='fullAR' && !gMap && currentPosition) initMiniMap();
-    });
-
-    
-    async function startAR(){
-      if(!('xr' in navigator))          throw new Error('WebXR not supported');
-      if(!(await navigator.xr.isSessionSupported('immersive-ar')))
-        throw new Error('AR not supported on this device');
-
-      /* reticle (optional ground-lock) */
-      const geoPlane=new THREE.PlaneGeometry(1,1);
-      const geoMat  =new THREE.MeshBasicMaterial({color:0xffff00,opacity:0.5,transparent:true});
-      reticle=new THREE.Mesh(geoPlane,geoMat);
-      reticle.rotateX(-Math.PI/2); scene.add(reticle);
-
-      /* enter XR */
-      const session=await navigator.xr.requestSession('immersive-ar',{requiredFeatures:['local-floor','hit-test']});
-      renderer.xr.setSession(session);
-      renderer.setAnimationLoop(()=>renderer.render(scene,camera));
-
-      clearLog();
-    }
-
-    document.getElementById('enter-ar').addEventListener('click',startAR);
-
-    /* ---------- boot ---------- */
-    (async()=>{
-      try{
-        await initOrientation();
-        waypoints = await fetchWaypoints();
-        log(`Waypoints loaded: ${waypoints.length}`);
-        redrawMiniMap();                // NEW – draws route when not in AR
-        startGeolocation();
-        loadingEl.style.display='none';
-      }catch(err){
-        loadingEl.textContent = err.message;
-      }
-    })();
-
   </script>
 </body>
 </html>
