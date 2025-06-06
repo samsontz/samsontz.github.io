@@ -116,7 +116,17 @@
   function initGeo(){navigator.geolocation.watchPosition(p=>{cur={lat:p.coords.latitude,lng:p.coords.longitude};if(!base){base={...cur};gotGeo=true;buildWhenReady();}updateHUD();shift();},err=>console.error(err),{enableHighAccuracy:true,timeout:10000,maximumAge:3000});}
 
   /* ===== waypoints ===== */
-  async function fetchWps(){const id=new URLSearchParams(location.search).get('routeId');if(!id)return[];const d=await(await fetch(API+id)).json();return Array.isArray(d.waypoints)?d.waypoints:[];}
+  async function fetchWps(){
+      const id=new URLSearchParams(location.search).get('routeId');
+      if(!id){throw new Error('Missing ?routeId parameter');}
+      const res=await fetch(API+id).catch(()=>null);
+      if(!res||!res.ok) throw new Error('Unable to reach waypoint server');
+      const data=await res.json().catch(()=>({}));
+      if(!Array.isArray(data.waypoints)||data.waypoints.length===0){
+        throw new Error('No waypoints found for routeId "'+id+'"');
+      }
+      return data.waypoints;
+  }(d.waypoints)?d.waypoints:[];}
   function prepWps(){const rel=p=>({...p,rel:toXY(base,p)});wps=[{...base,rel:{x:0,z:0}}].concat(fetched.map(rel));}
 
   /* ===== meshes ===== */
@@ -141,7 +151,16 @@
   /* ===== orchestration ===== */
   function buildWhenReady(){if(gotGeo&&gotWps){prepWps();buildScene();loop();}}
   async function startApp(){try{await initCamera();initThree();initOrientation();initGeo();
-    fetched=await fetchWps();gotWps=true;buildWhenReady();
+    try{
+      fetched=await fetchWps();
+      gotWps=true;
+      buildWhenReady();
+    }catch(err){
+      overlay.classList.remove('hidden');
+      msg.textContent=err.message;
+      console.error(err);
+      return;
+    }
     addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});document.getElementById('recenterBtn').onclick=()=>camera.position.set(0,1.6,0);
   }catch(e){overlay.classList.remove('hidden');msg.textContent='Error: '+e.message;console.error(e);}}
 
