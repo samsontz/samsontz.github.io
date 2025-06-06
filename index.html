@@ -1,214 +1,109 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AR Navigation & Path Preview</title>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <title>AR.js Navigation — Phone + Waypoint Trail</title>
 
-  <!-- Three.js (ES‑modules) -->
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    <!-- A‑Frame & AR.js (location‑based build) -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/3.4.5/aframe/build/aframe-ar.js"></script>
+
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
       }
-    }
-  </script>
-
-  <style>
-    html,
-    body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      font-family: system-ui, sans-serif;
-      background: #000;
-    }
-    #info {
-      position: fixed;
-      top: 0;
-      width: 100%;
-      padding: 0.3rem 0.75rem;
-      box-sizing: border-box;
-      text-align: center;
-      color: #fff;
-      background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent);
-      z-index: 2;
-      user-select: none;
-    }
-  </style>
-</head>
-<body>
-  <div id="info">Move the phone – a blue poly‑line always starts at your current position and connects every waypoint.</div>
-
-  <script type="module">
-    import * as THREE from 'three';
-    import { ARButton } from 'three/addons/webxr/ARButton.js';
-
-    
-    let camera, scene, renderer;
-    let controller;
-
-    const waypointMeshes = [];        // Arrow + destination meshes
-    let pathLine = null;              // THREE.Line connecting waypoints in 3‑D
-    const pathGeometry = new THREE.BufferGeometry();
-
-    // Dynamic list of Vector3 (first point == phone, others == waypoints)
-    const pathPoints = [];
-
-    // Geographic origin for converting lat/lon → local meters
-    let originLatLon = null;
-
-    // Replace with your server‑side / static list if needed (lat, lon)
-    const WAYPOINTS_GEO = [
-      { lat: 52.520717, lon: 13.409779 }, // sample
-      { lat: 52.520590, lon: 13.410915 },
-      { lat: 52.520404, lon: 13.412292 }
-    ];
-
-    
-    init();
-    animate();
-
-    function init() {
-      scene   = new THREE.Scene();
-      camera  = new THREE.PerspectiveCamera();
-
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setPixelRatio(window.devicePixelRatio);
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.xr.enabled = true;
-      document.body.appendChild(renderer.domElement);
-
-      document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
-
-      
-      const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.1);
-      scene.add(light);
-
-      
-      controller = renderer.xr.getController(0);
-      scene.add(controller);
-
-      /* Watch geolocation for real‑time phone position */
-      if ('geolocation' in navigator) {
-        navigator.geolocation.watchPosition(onGeo, onGeoError, {
-          enableHighAccuracy: true,
-          maximumAge: 1000,
-          timeout: 5000
-        });
-      } else {
-        document.getElementById('info').textContent = 'Geolocation not supported on this device.';
+      #status {
+        position: fixed;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.6);
+        color: #fff;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-family: system-ui, sans-serif;
+        z-index: 10000;
       }
+    </style>
+  </head>
+  <body>
+    <!-- Live GPS status -->
+    <div id="status">Waiting for GPS…</div>
 
-      
-    }
+    <!-- A‑Frame scene with AR.js enabled -->
+    <a-scene
+      vr-mode-ui="enabled: false"
+      embedded
+      renderer="antialias: true; alpha: true; logarithmicDepthBuffer: true"
+      arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false"
+    >
+      <!-- AR.js camera continuously updates device GPS pose -->
+      <a-camera gps-new-camera="gpsMinDistance: 5" look-controls-enabled="false"></a-camera>
+    </a-scene>
 
-    function onGeo(pos) {
-      const { latitude, longitude, accuracy } = pos.coords;
-      if (accuracy > 25) return; // Skip bad samples
+    <script>
+      /* ----------------------------------------------------------
+       * Demo – Static list of geographic waypoints.
+       * Replace these with your own fetched route / server JSON.
+       * ---------------------------------------------------------- */
+      const WAYPOINTS_GEO = [
+        { lat: 52.520717, lng: 13.409779 },
+        { lat: 52.520590, lng: 13.410915 },
+        { lat: 52.520404, lng: 13.412292 },
+      ];
 
-      if (!originLatLon) {
-        originLatLon = { lat: latitude, lon: longitude };
-        // Convert static geographic waypoints to local scene coordinates
-        for (const wp of WAYPOINTS_GEO) {
-          pathPoints.push(latLonToLocal(wp.lat, wp.lon));
+      /* ----------------------------------
+       * Global state
+       * ---------------------------------- */
+      const statusEl = document.getElementById("status");
+      const sceneEl = document.querySelector("a-scene");
+      let currentPos = null;           // Live device position {lat, lng}
+      let path = [];                   // [phone, ...waypoints]
+      const waypointEntities = [];     // AR cones for each waypoint
+
+      /* ----------------------------------
+       * Listen for AR.js GPS updates
+       * ---------------------------------- */
+      window.addEventListener("gps-camera-update-position", (e) => {
+        currentPos = {
+          lat: e.detail.position.latitude,
+          lng: e.detail.position.longitude,
+        };
+        statusEl.textContent = `GPS: ${currentPos.lat.toFixed(5)}, ${currentPos.lng.toFixed(5)}`;
+
+        // Build the path once we have the first high‑quality GPS fix
+        if (!path.length) {
+          buildPath();
         }
-        createArrowsAndPath();
-      }
-
-      // Update first point of path to live phone pose each sample
-      const phoneVec = latLonToLocal(latitude, longitude);
-      if (pathPoints.length) pathPoints[0].copy(phoneVec);
-    }
-
-    function onGeoError(err) {
-      console.warn('Geolocation error', err);
-    }
-
-    /* Quick equirectangular projection to meters (good enough for < 1 km routes) */
-    function latLonToLocal(lat, lon) {
-      const R = 6378137; // Earth radius in meters
-      const dLat = THREE.MathUtils.degToRad(lat - originLatLon.lat);
-      const dLon = THREE.MathUtils.degToRad(lon - originLatLon.lon);
-      const x = dLon * R * Math.cos(THREE.MathUtils.degToRad((lat + originLatLon.lat) / 2));
-      const z = -dLat * R; // Negative so north ➜ -Z in Three.js
-      return new THREE.Vector3(x, 0, z);
-    }
-
-   
-    function createArrowsAndPath() {
-      // Remove previous arrows / path if they exist
-      waypointMeshes.forEach(m => scene.remove(m));
-      waypointMeshes.length = 0;
-      if (pathLine) scene.remove(pathLine);
-
-      // 1. Create 3‑D path line (blue)
-      updatePathGeometry();
-      const lineMat = new THREE.LineBasicMaterial({ color: 0x0096ff, linewidth: 4 });
-      pathLine = new THREE.Line(pathGeometry, lineMat);
-      scene.add(pathLine);
-
-      // 2. Draw arrows for each segment → look towards next point
-      for (let i = 0; i < pathPoints.length - 1; i++) {
-        const arrow = buildArrowMesh();
-        arrow.position.copy(pathPoints[i]);
-        arrow.lookAt(pathPoints[i + 1]);
-        scene.add(arrow);
-        waypointMeshes.push(arrow);
-      }
-
-      // 3. Destination cylinder at last point
-      const destGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.02, 32);
-      const destMat = new THREE.MeshStandardMaterial({ color: 0xff3942 });
-      const dest = new THREE.Mesh(destGeo, destMat);
-      dest.rotation.x = -Math.PI / 2; // Lay flat
-      dest.position.copy(pathPoints[pathPoints.length - 1]);
-      scene.add(dest);
-      waypointMeshes.push(dest);
-    }
-
-    function buildArrowMesh() {
-      const geo = new THREE.ConeGeometry(0.06, 0.18, 16);
-      const mat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotateX(Math.PI / 2); // Point forward horizontally
-      return mesh;
-    }
-
-    /* Updates or creates buffer‑geometry that stores pathPoints as a poly‑line */
-    function updatePathGeometry() {
-      const arr = new Float32Array(pathPoints.length * 3);
-      pathPoints.forEach((v, idx) => {
-        arr[idx * 3] = v.x; arr[idx * 3 + 1] = v.y; arr[idx * 3 + 2] = v.z;
       });
-      pathGeometry.setAttribute('position', new THREE.BufferAttribute(arr, 3));
-      pathGeometry.computeBoundingSphere();
-    }
 
-   
-    function animate() {
-      renderer.setAnimationLoop(render);
-    }
+      /* ----------------------------------
+       * Build AR markers for the phone + waypoints.
+       * ---------------------------------- */
+      function buildPath() {
+        if (!currentPos) return; // still waiting for GPS
 
-    function render() {
-      // Update live phone position (camera.world) → first vertex + first arrow
-      if (pathPoints.length) {
-        camera.getWorldPosition(pathPoints[0]);
-        // Update geometry buffer directly for first vertex (0‑based)
-        const posAttr = pathGeometry.attributes.position;
-        posAttr.setXYZ(0, pathPoints[0].x, pathPoints[0].y, pathPoints[0].z);
-        posAttr.needsUpdate = true;
+        // 1 ) Compose full path – phone first, then fetched waypoints
+        path = [currentPos, ...WAYPOINTS_GEO];
 
-        // Re‑orient first arrow if present
-        if (waypointMeshes.length) {
-          waypointMeshes[0].position.copy(pathPoints[0]);
-          waypointMeshes[0].lookAt(pathPoints[1]);
+        // 2 ) Skip index 0 (phone) when placing cones – phone is dynamic
+        for (let i = 1; i < path.length; i++) {
+          const pt = path[i];
+          const cone = document.createElement("a-cone");
+          cone.setAttribute(
+            "gps-new-entity-place",
+            `latitude: ${pt.lat}; longitude: ${pt.lng}`
+          );
+          cone.setAttribute("height", "4");
+          cone.setAttribute("radius-bottom", "1");
+          cone.setAttribute("radius-top", "0.2");
+          cone.setAttribute("material", "color: #00b3ff; opacity: 0.85");
+          sceneEl.appendChild(cone);
+          waypointEntities.push(cone);
         }
       }
-
-      renderer.render(scene, camera);
-    }
-  </script>
-</body>
+    </script>
+  </body>
 </html>
