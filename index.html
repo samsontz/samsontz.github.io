@@ -98,7 +98,17 @@
 
   /* ------------------------------------------------------------ */
   /* Camera + Three.js                                            */
-  async function initCamera(){const v=document.getElementById('video');const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});v.srcObject=s;await new Promise(r=>v.onloadedmetadata=r);}  
+  async function initCamera(){
+    const v=document.getElementById('video');
+    // Request the rear‑facing camera (if available)
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'}}
+    });
+    v.srcObject = stream;
+    // Wait until metadata arrives, _then_ explicitly start playback
+    await new Promise(res=>v.onloadedmetadata=res);
+    try{await v.play();}catch(e){console.warn('video.play() failed – browser might auto‑play anyway',e);}
+  }}});v.srcObject=s;await new Promise(r=>v.onloadedmetadata=r);}  
   function initThree(){
     renderer=new THREE.WebGLRenderer({canvas:document.getElementById('canvas'),alpha:true,antialias:true});
     renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);
