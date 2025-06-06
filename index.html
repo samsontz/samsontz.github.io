@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AR Navigation – Waypoint Edition (v4 – live origin)</title>
+  <title>AR Navigation – Waypoint Edition (v5 – phone as first WP)</title>
 
   <!-- Three.js (non‑module build) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
   <style>
-    /* ✨ VISUALS & LAYOUT (unchanged from v3) ✨ */
+    /* === VISUALS & LAYOUT === */
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;background:#000;color:#fff;overflow:hidden}
     #video,#canvas{position:absolute;inset:0;width:100vw;height:100vh}
@@ -65,160 +65,122 @@
   <!---------------------  MAIN SCRIPT  ----------------------------->
   <script>
   /* 🌍 Coordinate helpers */
-  const R = 6371e3, toRad = v=>v*Math.PI/180;
-  const dist = (a,b)=>{const f1=toRad(a.lat), f2=toRad(b.lat), dF=toRad(b.lat-a.lat), dL=toRad(b.lng-a.lng); const h=Math.sin(dF/2)**2+Math.cos(f1)*Math.cos(f2)*Math.sin(dL/2)**2; return 2*R*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));};
-  const toLocal = (o,p)=>{const f=(toRad(o.lat)+toRad(p.lat))/2; const dx=R*toRad(p.lng-o.lng)*Math.cos(f); const dz=R*toRad(p.lat-o.lat); return {x:dx,z:dz};};
+  const EARTH_R = 6371e3, deg2rad=v=>v*Math.PI/180;
+  const geoDist=(a,b)=>{const f1=deg2rad(a.lat),f2=deg2rad(b.lat),dF=deg2rad(b.lat-a.lat),dL=deg2rad(b.lng-a.lng);const h=Math.sin(dF/2)**2+Math.cos(f1)*Math.cos(f2)*Math.sin(dL/2)**2;return 2*EARTH_R*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));};
+  const geoToLocal=(o,p)=>{const f=(deg2rad(o.lat)+deg2rad(p.lat))/2;return{ x:EARTH_R*deg2rad(p.lng-o.lng)*Math.cos(f), z:EARTH_R*deg2rad(p.lat-o.lat) };};
 
-  /* 🔗 Backend endpoint */
-  const API_ROOT = 'https://waypoints-prht.onrender.com/get-waypoints/';
+  /* Backend */
+  const API_ROOT='https://waypoints-prht.onrender.com/get-waypoints/';
 
-  /* 🔧 Global refs */
-  let renderer,scene,camera,arrowGroup,guideArrow;
-  let currentPos=null, firstFix=false; // first GPS
-  let wps=[], pathScale=0.08;
+  /* Globals */
+  let renderer,scene,camera,arrowGroup;
+  let currentPos=null, firstFix=false;
+  let basePos=null;          // phone’s initial location → new path origin
+  let fetched=[], wps=[];    // original + with base
+  let pathScale=0.08;
   let readyGeo=false, readyWps=false;
 
-  /* ------------------------------------------------------------ */
-  /* PERMISSION overlay                                           */
-  const overlay   = document.getElementById('permOverlay');
-  const overlayMsg= document.getElementById('permMessage');
-  document.getElementById('permBtn').onclick = requestPermissions;
-
-  async function requestPermissions(){
+  /* -------- permission overlay ---------- */
+  const overlay=document.getElementById('permOverlay');
+  const permMsg=document.getElementById('permMessage');
+  document.getElementById('permBtn').onclick=requestPerms;
+  async function requestPerms(){
     try{
-      overlayMsg.textContent = 'Requesting camera…';
+      permMsg.textContent='Requesting camera…';
       await navigator.mediaDevices.getUserMedia({video:true});
-      overlayMsg.textContent = 'Requesting location…';
+      permMsg.textContent='Requesting location…';
       await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej));
-      if(DeviceOrientationEvent?.requestPermission){overlayMsg.textContent='Requesting motion sensors…'; await DeviceOrientationEvent.requestPermission();}
+      if(DeviceOrientationEvent?.requestPermission){permMsg.textContent='Requesting motion sensors…';await DeviceOrientationEvent.requestPermission();}
       overlay.classList.add('hidden');
       bootstrap();
-    }catch(e){overlayMsg.textContent='Permission denied – allow in browser settings then tap again.';console.error(e);}
-  }
+    }catch(e){permMsg.textContent='Permission denied. Adjust your browser settings.';console.error(e);} }
 
-  /* ------------------------------------------------------------ */
-  /* Camera + Three.js                                            */
+  /* ---------- camera + three ----------- */
   async function initCamera(){
     const v=document.getElementById('video');
-    // Request the rear‑facing camera (if available)
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:'environment'}}
-    });
-    v.srcObject = stream;
-    // Wait until metadata arrives, _then_ explicitly start playback
-    await new Promise(res=>v.onloadedmetadata=res);
-    try{await v.play();}catch(e){console.warn('video.play() failed – browser might auto‑play anyway',e);}
-  }}});v.srcObject=s;await new Promise(r=>v.onloadedmetadata=r);}  
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
+    v.srcObject=stream; await new Promise(r=>v.onloadedmetadata=r); try{await v.play();}catch(e){}
+  }
   function initThree(){
     renderer=new THREE.WebGLRenderer({canvas:document.getElementById('canvas'),alpha:true,antialias:true});
     renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);
     scene=new THREE.Scene();
     camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.01,1000);
     camera.position.set(0,1.6,0);
-    scene.add(new THREE.AmbientLight(0xffffff,0.8));const dir=new THREE.DirectionalLight(0xffffff,0.7);dir.position.set(15,25,8);scene.add(dir);
+    scene.add(new THREE.AmbientLight(0xffffff,0.8));const dl=new THREE.DirectionalLight(0xffffff,0.7);dl.position.set(15,25,8);scene.add(dl);
     arrowGroup=new THREE.Group();scene.add(arrowGroup);
   }
 
-  /* ------------------------------------------------------------ */
-  /* Device orientation                                           */
+  /* -------- orientation ---------- */
   function initOrientation(){
-    const cb=e=>{const a=e.alpha||0,b=e.beta||0;document.getElementById('compassNeedle').style.transform=`rotate(${360-a}deg)`;camera.rotation.set(b*Math.PI/180,a*Math.PI/180,0,'YXZ');};
+    const cb=e=>{const a=e.alpha||0,b=e.beta||0;document.getElementById('compassNeedle').style.transform=`rotate(${360-a}deg)`;camera.rotation.set(b*deg2rad(1),a*deg2rad(1),0,'YXZ');};
     if(DeviceOrientationEvent?.requestPermission){DeviceOrientationEvent.requestPermission().then(r=>{if(r==='granted')addEventListener('deviceorientation',cb);});}
     else addEventListener('deviceorientation',cb);
   }
 
-  /* ------------------------------------------------------------ */
-  /* GPS                                                          */
+  /* ---------- GPS ---------- */
   function initGeolocation(){
-    navigator.geolocation.watchPosition(p=>{
-      currentPos = {lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy};
-      updateStatus(p.coords.accuracy);
-      if(!firstFix){firstFix=true; readyGeo=true; maybeStart();}
-      updateHUD(); shiftScene();
+    navigator.geolocation.watchPosition(pos=>{
+      currentPos={lat:pos.coords.latitude,lng:pos.coords.longitude,acc:pos.coords.accuracy};
+      updateStatus(pos.coords.accuracy);
+      if(!firstFix){firstFix=true;basePos={...currentPos};readyGeo=true;tryStart();}
+      updateHUD();shiftScene();
     },err=>{updateStatus(null,'GPS error');console.error(err);},{enableHighAccuracy:true,maximumAge:3000,timeout:10000});
   }
+  function updateStatus(acc,msg){const el=document.getElementById('statusIndicator');if(msg){el.innerHTML='<span class="gps-searching">'+msg+'</span>';return;}el.innerHTML=acc<12?'<span class="gps-accuracy">📍 GPS OK</span>':'<span class="gps-searching">📡 Low accuracy</span>';}
 
-  function updateStatus(acc,msg){const el=document.getElementById('statusIndicator'); if(msg){el.innerHTML='<span class="gps-searching">'+msg+'</span>';return;} el.innerHTML=acc<12?'<span class="gps-accuracy">📍 GPS OK</span>':'<span class="gps-searching">📡 Low accuracy</span>';}
-
-  /* ------------------------------------------------------------ */
-  /* Waypoints                                                    */
-  async function loadWaypoints(){
-    const id=new URLSearchParams(location.search).get('routeId'); if(!id){console.warn('No routeId');return[];}
+  /* ---------- waypoints ---------- */
+  async function fetchWaypoints(){
+    const id=new URLSearchParams(location.search).get('routeId'); if(!id)return[];
     const data=await (await fetch(API_ROOT+id)).json(); return Array.isArray(data.waypoints)?data.waypoints:[];
   }
-  function prep(raw){ if(!raw.length)return[]; const keep=[raw[0]]; raw.forEach(w=>{if(dist(keep.at(-1),w)>4)keep.push(w);}); const base=keep[0]; return keep.map(w=>({...w,rel:toLocal(base,w)})); }
-
-  /* ------------------------------------------------------------ */
-  /* 3‑D factories                                                */
-  function mkArrow(){
-    const g=new THREE.Group();
-    const shaft=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,0.9,8),new THREE.MeshLambertMaterial({color:0x00ff40}));
-    shaft.rotation.x=Math.PI/2; shaft.position.z=0.45; g.add(shaft);
-    const head=new THREE.Mesh(new THREE.ConeGeometry(0.14,0.28,12),new THREE.MeshLambertMaterial({color:0xff2020}));
-    head.rotation.x=Math.PI/2; head.position.z=0.9; g.add(head);
-    g.userData={t:Math.random()*6.28}; return g;
+  function buildWpList(){
+    const rel=(p)=>({...p,rel:geoToLocal(basePos,p)});
+    wps=[ {lat:basePos.lat,lng:basePos.lng,rel:{x:0,z:0},type:'origin'}, ...fetched.map(rel) ];
   }
-  function mkPin(){const g=new THREE.Group();const bodyMat=new THREE.MeshLambertMaterial({color:0xc41230,emissive:0xc41230}); const cyl=new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.35,0.6,6),bodyMat); const core=new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.18,0.1,6),new THREE.MeshLambertMaterial({color:0xffffff})); core.position.y=0.33; const tip=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.45,14),bodyMat); tip.position.y=-0.45; g.add(cyl,core,tip); return g; }
 
-  /* ------------------------------------------------------------ */
-  /* Build static arrow field                                     */
-  function buildStaticPath(){ arrowGroup.clear(); if(!wps.length)return;
-    // scale so path fits nicely
-    const far=Math.max(...wps.map(w=>Math.hypot(w.rel.x,w.rel.z))); pathScale=25/Math.max(25,far);
+  /* ---------- 3‑D factories ---------- */
+  function mkArrow(){const g=new THREE.Group();const shaft=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,0.9,8),new THREE.MeshLambertMaterial({color:0x00ff40}));shaft.rotation.x=Math.PI/2;shaft.position.z=0.45;g.add(shaft);const head=new THREE.Mesh(new THREE.ConeGeometry(0.14,0.28,12),new THREE.MeshLambertMaterial({color:0xff2020}));head.rotation.x=Math.PI/2;head.position.z=0.9;g.add(head);g.userData={t:Math.random()*6.28};return g;}
+  function mkPin(){const g=new THREE.Group();const m=new THREE.MeshLambertMaterial({color:0xc41230,emissive:0xc41230});const cyl=new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.35,0.6,6),m);const core=new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.18,0.1,6),new THREE.MeshLambertMaterial({color:0xffffff}));core.position.y=0.33;const tip=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.45,14),m);tip.position.y=-0.45;g.add(cyl,core,tip);return g;}
+
+  /* ---------- build scene ---------- */
+  function buildScene(){arrowGroup.clear();if(wps.length<2)return;
+    // scale heuristically to keep within view
+    const far=Math.max(...wps.map(p=>Math.hypot(p.rel.x,p.rel.z)));pathScale=25/Math.max(25,far);
     // destination pin
-    const pin=mkPin(); pin.scale.setScalar(2*pathScale); const dst=wps.at(-1).rel; pin.position.set(dst.x*pathScale,0,dst.z*pathScale); arrowGroup.add(pin);
-    // segment arrows
+    const dst=wps.at(-1).rel;const pin=mkPin();pin.scale.setScalar(2*pathScale);pin.position.set(dst.x*pathScale,0,dst.z*pathScale);arrowGroup.add(pin);
+    // arrows along each segment
     for(let i=0;i<wps.length-1;i++){
-      const a=wps[i].rel, b=wps[i+1].rel, dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz), yaw=Math.atan2(dx,dz);
+      const a=wps[i].rel,b=wps[i+1].rel,dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz),yaw=Math.atan2(dx,dz);
       const count=Math.max(3,Math.floor(len/8));
-      for(let j=0;j<count;j++){const t=(j+0.5)/count; const arr=mkArrow(); arr.rotation.y=-yaw; arr.scale.setScalar(4*pathScale); arr.position.set((a.x+dx*t)*pathScale,0.03,(a.z+dz*t)*pathScale); arrowGroup.add(arr);} }
-    // guide arrow (dynamic from user → first WP)
-    guideArrow=mkArrow(); guideArrow.scale.setScalar(4*pathScale); arrowGroup.add(guideArrow);
+      for(let j=0;j<count;j++){const t=(j+0.5)/count;const arr=mkArrow();arr.rotation.y=-yaw;arr.scale.setScalar(4*pathScale);arr.position.set((a.x+dx*t)*pathScale,0.03,(a.z+dz*t)*pathScale);arrowGroup.add(arr);} }
     shiftScene();
   }
 
-  /* ------------------------------------------------------------ */
-  /* Dynamic shift + guide arrow update                           */
-  function shiftScene(){ if(!currentPos||!wps.length)return; const d=toLocal(wps[0],currentPos); arrowGroup.position.set(-d.x*pathScale,0,-d.z*pathScale);
-    // update guide arrow length/orientation
-    if(guideArrow){
-      const vec=toLocal(currentPos,wps[0]); const distM=Math.hypot(vec.x,vec.z); const dir=Math.atan2(vec.x,vec.z);
-      const scaleZ=distM*pathScale/1.18; // 1.18 ≈ original arrow length
-      guideArrow.scale.set(4*pathScale,4*pathScale,scaleZ);
-      guideArrow.rotation.y=-dir;
-      guideArrow.position.set(0,0.03,0); // origin (user) is 0 after shiftScene
-    }
-  }
+  /* ---------- dynamic shift ---------- */
+  function shiftScene(){ if(!currentPos||!basePos)return; const d=geoToLocal(basePos,currentPos); arrowGroup.position.set(-d.x*pathScale,0,-d.z*pathScale); }
 
-  /* ------------------------------------------------------------ */
-  /* HUD updates                                                  */
-  function updateHUD(){ if(!currentPos||!wps.length)return; const m=dist(currentPos,wps.at(-1)); const km=m/1000; const txt=km<1?`${Math.round(m)} m`:`${km.toFixed(1)} km`; const mins=Math.round(km*2);
-    document.getElementById('distanceTime').textContent=`${txt} • ${mins} min`;
-    const eta=new Date(); eta.setMinutes(eta.getMinutes()+mins); document.getElementById('eta').textContent=`ETA ${eta.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`; }
+  /* ---------- HUD ---------- */
+  function updateHUD(){if(!currentPos||!wps.length)return;const m=geoDist(currentPos,wps.at(-1));const km=m/1000;document.getElementById('distanceTime').textContent=`${km<1?Math.round(m)+' m':km.toFixed(1)+' km'} • ${Math.round(km*2)} min`;const eta=new Date();eta.setMinutes(eta.getMinutes()+Math.round(km*2));document.getElementById('eta').textContent=`ETA ${eta.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;}
 
-  /* ------------------------------------------------------------ */
-  /* Render loop                                                  */
-  function loop(){ requestAnimationFrame(loop); arrowGroup.children.forEach(a=>{if(a.userData){a.userData.t+=0.05; a.scale.y=(Array.isArray(a.scale)?a.scale.y: a.scale.y||1 ); a.scale.y= (1+0.22*Math.sin(a.userData.t))*(4*pathScale);} }); renderer.render(scene,camera);}  
+  /* ---------- render loop ---------- */
+  function render(){requestAnimationFrame(render);arrowGroup.children.forEach(a=>{if(a.userData){a.userData.t+=0.05;a.scale.y=(1+0.22*Math.sin(a.userData.t))*4*pathScale;}});renderer.render(scene,camera);}  
 
-  /* ------------------------------------------------------------ */
-  /* UI helpers                                                   */
-  function initUI(){ addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight);}); document.getElementById('recenterBtn').onclick=()=>camera.position.set(0,1.6,0); }
+  /* ---------- UI ---------- */
+  function initUI(){addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});document.getElementById('recenterBtn').onclick=()=>camera.position.set(0,1.6,0);}  
 
-  /* ------------------------------------------------------------ */
-  /* Start when we have both GPS & waypoints                      */
-  function maybeStart(){ if(readyGeo&&readyWps){ buildStaticPath(); loop(); } }
+  /* ---------- orchestrate ---------- */
+  function tryStart(){ if(readyGeo&&readyWps){ buildWpList(); buildScene(); render(); } }
 
-  /* ------------------------------------------------------------ */
-  /* Bootstrap                                                    */
   async function bootstrap(){ try{
       await initCamera(); initThree(); initOrientation(); initGeolocation(); initUI();
-      wps=prep(await loadWaypoints()); readyWps=true; maybeStart();
-    }catch(e){ console.error(e); overlay.classList.remove('hidden'); overlayMsg.textContent='Error: '+e.message; }
+      fetched=await fetchWaypoints(); readyWps=true; tryStart();
+    }catch(e){console.error(e);overlay.classList.remove('hidden');permMsg.textContent='Error: '+e.message;}
   }
 
-  // auto-show overlay if HTTPS ok, else abort
-  overlayMsg.textContent = location.protocol==='https:'? 'Tap the button then allow permissions.' : 'Page must be served over HTTPS.';
-  if(location.protocol!=='https:') document.getElementById('permBtn').style.display='none';
+  // overlay auto-show
+  permMsg.textContent=location.protocol==='https:'?'Tap button then allow permissions.':'This page must run over HTTPS.';
+  if(location.protocol!=='https:')document.getElementById('permBtn').style.display='none';
   </script>
 </body>
 </html>
