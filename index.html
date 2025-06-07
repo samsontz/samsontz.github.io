@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AR Navigation – Waypoint Edition (v7 • logic‑fix)</title>
+  <title>AR Navigation – Waypoint Edition (v7.1 • GPS‑fix)</title>
 
   <!-- Three.js (quick non‑module build) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -25,6 +25,9 @@
     .control-btn{width:55px;height:55px;border-radius:50%;background:rgba(0,0,0,.8);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;font-size:25px;transition:.25s}
     .control-btn:hover{background:rgba(255,255,255,.3);transform:scale(1.1)}
     .center-crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:18px;height:18px;border:2px solid rgba(255,255,255,.6);border-radius:50%;z-index:4;pointer-events:none}
+
+    /* simple helper so we can toggle visibility cleanly */
+    .hidden{display:none !important}
   </style>
 </head>
 <body>
@@ -42,20 +45,24 @@
   </div>
   <div class="center-crosshair"></div>
 
+  <!-- translucent status panel -->
   <div id="overlay" class="ui-overlay" style="top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;backdrop-filter:blur(6px);background:rgba(0,0,0,.55);padding:25px 40px;border-radius:18px">
     <p id="pMsg">📡 Searching GPS…</p>
   </div>
 
+  <!-- ---------------- Main script ---------------- -->
 <script>
+/****************************************** GLOBALS *****/
 let renderer, scene, camera, gArrows;
 let current=null, base=null;              // gps points
 let fetched=[],   wps=[];                 // server + merged way‑points
-let scale=0.1;                            // metres → scene units
+let scale=0.1;                            // metres → scene units (tweak if arrows too close/far)
 let geoOK=false, wapOK=false;
 let geoWatchId=null;                      // id for clearWatch if needed
 
 const API = 'https://waypoint-server.example/route/';
 
+/************************************* UTILITY HELPERS *****/
 const toRad   = d=>d*Math.PI/180;
 const toDeg   = r=>r*180/Math.PI;
 const dist    = (a,b)=>{
@@ -65,7 +72,8 @@ const dist    = (a,b)=>{
 };
 const bearing = (a,b)=>{
   const φ1=toRad(a.lat), φ2=toRad(b.lat), Δλ=toRad(b.lng-a.lng);
-  const y=Math.sin(Δλ)*Math.cos(φ2); const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  const y=Math.sin(Δλ)*Math.cos(φ2);
+  const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
   return (toDeg(Math.atan2(y,x))+360)%360;
 };
 const toXY    = (o,p)=>{
@@ -73,6 +81,11 @@ const toXY    = (o,p)=>{
   return {x: Math.sin(brg)*d, z: Math.cos(brg)*d};
 };
 
+/************************************ OVERLAY HELPERS *****/
+function setOverlay(msg){ pMsg.textContent=msg; overlay.classList.remove('hidden'); }
+function hideOverlay(){ overlay.classList.add('hidden'); }
+
+/******************************** CAMERA & THREE ******* */
 async function initCamera(){
   const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
   video.srcObject=stream; await video.play();
@@ -90,107 +103,157 @@ function initThree(){
   });
 }
 
+/********************************* DEVICE ORIENTATION ****/ 
 function initOrientation(){
-  window.addEventListener('deviceorientation',(e)=>{
-    if(!e.alpha) return; // sensor off / no permission
-    const heading=e.webkitCompassHeading||360-e.alpha; // iOS/Android normalisation
+  // we purposely request permission on iOS 13+ (not required on Chrome/Android)
+  if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+    DeviceOrientationEvent.requestPermission().catch(()=>{});
+  }
+  window.addEventListener('deviceorientation',e=>{
+    if(e.absolute===false && e.alpha===null) return; // sensor unavailable
+    const heading = e.webkitCompassHeading || (360 - e.alpha); // unify iOS / Android
     compassNeedle.style.transform=`rotate(${heading}deg)`;
     if(gArrows) gArrows.rotation.y=toRad(-heading);
   });
 }
 
+/******************************** GEOLOCATION ***********/
 function initGeo(){
-  if(!('geolocation' in navigator))
-      throw new Error('Geolocation not supported by this device.');
+  if(!('geolocation' in navigator)){
+    throw new Error('This device does not support Geolocation.');
+  }
 
-  // Quick first fix (low‑accuracy, fast)
-  navigator.geolocation.getCurrentPosition(pos=>{
-      current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-
-      if(!base){
-        base = { ...current };
-        geoOK = true;
-        tryBuild();
-      }
-
-      uiUpdate();
-      shiftScene();
-  }, err=>{
-      console.warn('[geo] quick fix failed', err);
-      // We still fall through to high‑accuracy watch below.
+  // Quick coarse fix to unblock UI fast
+  navigator.geolocation.getCurrentPosition(handleFix, err=>{
+    console.warn('[geo] quick fix failed', err);
   }, {
-      enableHighAccuracy:false,
-      timeout:5000,
-      maximumAge:60000
+    enableHighAccuracy:false,
+    timeout:5000,
+    maximumAge:60000
   });
 
-  // Continuous watch with high‑accuracy for refinement
-  const optsHigh = {
-      enableHighAccuracy:true,
-      timeout:10000,
-      maximumAge:3000
-  };
+  // High‑accuracy continuous watch for refinement
+  geoWatchId = navigator.geolocation.watchPosition(handleFix, handleGeoError, {
+    enableHighAccuracy:true,
+    timeout:15000,
+    maximumAge:3000
+  });
+}
+function handleFix(pos){
+  current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
 
-  geoWatchId = navigator.geolocation.watchPosition(pos=>{
-      current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+  // first ever fix becomes base/origin
+  if(!base){
+    base = { ...current };
+    geoOK = true;
+    tryBuild();
+  }
 
-      if(!base){
-        base = { ...current };
-        geoOK = true;
-        tryBuild();
-      }
+  // update UI & scene (safe‑guard if scene not yet built)
+  uiUpdate();
+  shiftScene();
 
-      uiUpdate();
-      shiftScene();
-  }, err=>{
-      console.error('[geo] watch error', err);
-      if(err.code === err.PERMISSION_DENIED){
-         throw new Error('Location permission denied. Enable GPS for AR navigation.');
-      }
-  }, optsHigh);
+  // If GPS ready but waypoints still brewing, update status
+  if(geoOK && !wapOK){
+    setOverlay('📦 Loading route…');
+  }
+}
+function handleGeoError(err){
+  console.error('[geo] watch error', err);
+  if(err.code === err.PERMISSION_DENIED){
+    setOverlay('⚠️ Location permission denied. Enable GPS to continue.');
+  }
 }
 
+/******************************** WAY‑POINT FETCH *******/
 async function fetchWps(){
   const id=new URLSearchParams(location.search).get('routeId');
-  if(!id) throw new Error('Missing ?routeId=…');
-  const res=await fetch(API+id); if(!res.ok) throw new Error('Waypoint server error');
-  const data=await res.json(); if(!Array.isArray(data.waypoints)||!data.waypoints.length) throw new Error('Route has no way‑points');
-  fetched=data.waypoints; wapOK=true; tryBuild();
+  if(!id){ throw new Error('Missing ?routeId=… in URL.'); }
+
+  const res=await fetch(API+id);
+  if(!res.ok){ throw new Error('Waypoint‑server responded with '+res.status); }
+
+  const data=await res.json();
+  if(!Array.isArray(data.waypoints) || !data.waypoints.length){
+    throw new Error('Route has no way‑points.');
+  }
+  fetched=data.waypoints;
+  wapOK=true;
+  tryBuild();
 }
 
-function meshArrow(){ const g=new THREE.Group();
+/********************************* SCENE CREATION ******/
+function meshArrow(){
+  const g=new THREE.Group();
   const shaft=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,1,8),new THREE.MeshLambertMaterial({color:0x00ff40}));
   shaft.rotation.x=Math.PI/2; shaft.position.z=-0.5; g.add(shaft);
   const head=new THREE.Mesh(new THREE.ConeGeometry(0.14,0.25,8),new THREE.MeshLambertMaterial({color:0x00ff40}));
-  head.rotation.x=Math.PI/2; head.position.z=-1; g.add(head); return g;
+  head.rotation.x=Math.PI/2; head.position.z=-1; g.add(head);
+  return g;
 }
-function prepareWP(){ wps=[...fetched.map(wp=>({...wp,mesh:meshArrow()})), {lat:base.lat,lng:base.lng}]; }
-function buildScene(){ gArrows=new THREE.Group(); wps.forEach(wp=>gArrows.add(wp.mesh)); scene.add(gArrows); }
+function prepareWP(){
+  // Convert server‑waypoints to enriched objects + tack on final destination (= origin point) if necessary
+  wps = [
+    ...fetched.map(wp=>({...wp, mesh: meshArrow()})),
+  ];
+}
+function buildScene(){
+  gArrows = new THREE.Group();
+  wps.forEach(wp=>gArrows.add(wp.mesh));
+  scene.add(gArrows);
+  hideOverlay();
+}
 
-function shiftScene(){ if(!current) return; const d=toXY(base,current); gArrows.position.set(-d.x*scale,0,-d.z*scale); }
-function uiUpdate(){ if(!current||!wps.length) return; const m=dist(current,wps.at(-1)),km=m/1000;
-  distanceTime.textContent=`${km<1?Math.round(m)+' m':km.toFixed(1)+' km'} • ${Math.round(km*2)} min`;
-  const ETA=new Date();ETA.setMinutes(ETA.getMinutes()+Math.round(km*2)); eta.textContent=`ETA ${ETA.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`; }
+/********************************* RUNTIME UPDATES *****/
+function shiftScene(){
+  if(!current || !gArrows) return; // wait until scene is built
+  const d = toXY(base, current);
+  gArrows.position.set(-d.x*scale, 0, -d.z*scale);
+}
+function uiUpdate(){
+  if(!current || !wps.length) return;
+  const m = dist(current, wps[wps.length-1]); // distance to final waypoint
+  const km = m/1000;
+  distanceTime.textContent = `${ km < 1 ? Math.round(m)+' m' : km.toFixed(1)+' km' } • ${ Math.round(km*2) } min`;
+  const ETA = new Date(); ETA.setMinutes(ETA.getMinutes()+Math.round(km*2));
+  eta.textContent = `ETA ${ ETA.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) }`;
+}
 
-function loop(){ requestAnimationFrame(loop); renderer.render(scene,camera);}()
+/*********************************** RENDER LOOP ******/
+function loop(){
+  requestAnimationFrame(loop);
+  if(renderer && camera && scene){ renderer.render(scene,camera); }
+}
 
-function tryBuild(){ if(geoOK&&wapOK){ prepareWP(); buildScene(); } }
+/************************************** GATEKEEPER ****/
+function tryBuild(){
+  if(geoOK && wapOK){
+    prepareWP();
+    buildScene();
+  }
+}
 
+/***************************************** APP BOOT ***/
 async function startApp(){
   try{
     await initCamera();
-    initThree(); initOrientation(); initGeo();
+    initThree();
+    initOrientation();
+    initGeo();
     await fetchWps();
     loop();
-  }catch(e){ overlay.classList.remove('hidden'); pMsg.textContent=e.message; console.error(e); }
+  }catch(e){
+    console.error(e);
+    setOverlay('❌ '+e.message);
+  }
 }
 
-if(location.protocol!=='https:'){
-  pMsg.textContent='This demo requires HTTPS to access sensor & location';
+/************************* HTTPS GUARD + KICK‑OFF *****/
+if(location.protocol !== 'https:'){
+  setOverlay('🔒 Please open this demo over HTTPS to access camera & location sensors.');
 }else{
   startApp();
 }
-
 </script>
 </body>
 </html>
