@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>AR Navigation – Phone → Waypoint → Destination</title>
+  <title>AR Navigation – Phone → Waypoint → Destination</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html,body{margin:0;padding:0;overflow:hidden;height:100%;background:#000;color:#fff;font-family:system-ui,sans-serif}
@@ -12,43 +12,50 @@
   </style>
 </head>
 <body>
-  <!-- ── Overlay UI ─────────────────────────────────────────────────────────── -->
   <div id="ui">
     <button id="goBtn">Draw Route</button>
     <div id="status">Loading …</div>
   </div>
 
-  <!-- Google Maps JS API (⚠️ put your own API key) -->
-  <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCuQ4ijj8UEZrge9r0j9Feo5DTb1fb5WXQ&libraries=geometry"></script>
-
-  <!-- Three.js & WebXR -->
+  <!-- Three.js, WebXR & Google Maps (Maps loaded dynamically) -->
   <script type="module" defer>
-    import * as THREE      from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js';
-    import { ARButton }    from 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/webxr/ARButton.js';
+    import * as THREE   from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js';
+    import { ARButton } from 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/webxr/ARButton.js';
 
-    //--------------------------------------------------------------------------
-    // ↳ DOM refs
-    //--------------------------------------------------------------------------
-    const goBtn   = document.getElementById('goBtn');
-    const status  = document.getElementById('status');
+    // ────────────────────────────────────────────────────────────
+    // Dynamic Google Maps JS API loader
+    // ────────────────────────────────────────────────────────────
+    const loadMaps = () => new Promise(resolve => {
+      if (window.google && google.maps) return resolve();
+      const s = document.createElement('script');
+      /* ⚠️ REPLACE WITH YOUR REAL API KEY */
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyCuQ4ijj8UEZrge9r0j9Feo5DTb1fb5WXQ&libraries=geometry';
+      s.async = true;
+      s.onload = resolve;
+      document.head.appendChild(s);
+    });
 
-    //--------------------------------------------------------------------------
-    // ↳ Globals
-    //--------------------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // DOM refs
+    // ────────────────────────────────────────────────────────────
+    const goBtn  = document.getElementById('goBtn');
+    const status = document.getElementById('status');
+
+    // ────────────────────────────────────────────────────────────
+    // Globals
+    // ────────────────────────────────────────────────────────────
     let scene, camera, renderer;
-    let startLat, startLon;            // first GPS fix  → local frame origin
+    let startLat, startLon;
     let metersPerDegLat, metersPerDegLon;
-    let waypoints = [];                // loaded from server (first wp to last wp)
-    let destLat, destLon;              // convenience – last waypoint
-
+    let waypoints = [];
+    let destLat,  destLon;
     const chevronGroup = new THREE.Group();
     let   destMarker   = null;
 
-    //--------------------------------------------------------------------------
-    // ↳ Helpers
-    //--------------------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // Helpers
+    // ────────────────────────────────────────────────────────────
     const latLonToVector = (lat, lon) => {
-      // ENU right‑handed: +x east, +z north (invert for three.js –z forward)
       const x = (lon - startLon) * metersPerDegLon;
       const z = (lat - startLat) * metersPerDegLat;
       return new THREE.Vector3(x, 0, -z);
@@ -69,35 +76,33 @@
       return group;
     };
 
-    //--------------------------------------------------------------------------
-    // ↳ Chevron builder (phone → first wp → … → dest)
-    //--------------------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // Chevron builder
+    // ────────────────────────────────────────────────────────────
     const buildChevrons = () => {
+      if (!window.google || !google.maps || !google.maps.geometry) {
+        status.textContent = 'Google Maps not ready yet';
+        return;
+      }
+      if (!startLat) {
+        status.textContent = 'Waiting for GPS fix …';
+        return;
+      }
+      if (!waypoints.length) {
+        status.textContent = 'Waypoints not loaded';
+        return;
+      }
+
       chevronGroup.clear();
       scene.remove(chevronGroup);
       scene.add(chevronGroup);
 
-      if (!window.google || !google.maps || !google.maps.geometry) {
-        alert('Google Maps API still loading – try again in a second …');
-        return;
-      }
-      if (!startLat) {
-        alert('Waiting for GPS fix …');
-        return;
-      }
-      if (!waypoints.length) {
-        alert('Waypoints not loaded');
-        return;
-      }
-
-      // Build an ordered list: phone position then waypoints
       const full = [{ lat: startLat, lng: startLon }, ...waypoints];
-      const interval = 2; // m between chevrons
+      const interval = 2; // metres
 
       for (let i = 0; i < full.length - 1; i++) {
         const A = new google.maps.LatLng(full[i].lat,     full[i].lng);
         const B = new google.maps.LatLng(full[i + 1].lat, full[i + 1].lng);
-
         const segLen = google.maps.geometry.spherical.computeDistanceBetween(A, B);
         const heading = google.maps.geometry.spherical.computeHeading(A, B);
 
@@ -119,16 +124,16 @@
         }
       }
 
-      // ── Destination pin ────────────────────────────────────────────────────
+      // Destination pin
       if (destMarker) scene.remove(destMarker);
       destMarker = createPin();
       destMarker.position.copy(latLonToVector(destLat, destLon));
       scene.add(destMarker);
     };
 
-    //--------------------------------------------------------------------------
-    // ↳ Waypoints loader (expects ?routeId=… in URL)
-    //--------------------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // Waypoints loader
+    // ────────────────────────────────────────────────────────────
     const fetchWaypoints = async () => {
       const params  = new URLSearchParams(location.search);
       const routeId = params.get('routeId');
@@ -136,13 +141,13 @@
         status.textContent = '⚠️ No routeId in URL';
         return;
       }
-      status.textContent = 'Fetching waypoints …';
+      status.textContent = 'Fetching waypoints …';
       try {
         const res  = await fetch(`https://waypoints-prht.onrender.com/get-waypoints?routeId=${routeId}`);
         if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
         const json = await res.json();
-        waypoints  = json.waypoints || [];
-        if (!waypoints.length) throw new Error('empty set');
+        if (!Array.isArray(json.waypoints) || !json.waypoints.length) throw new Error('empty set');
+        waypoints = json.waypoints;
         ({ lat: destLat, lng: destLon } = waypoints[waypoints.length - 1]);
         status.textContent = `✓ Loaded ${waypoints.length} waypoints`;
       } catch (err) {
@@ -151,9 +156,9 @@
       }
     };
 
-    //--------------------------------------------------------------------------
-    // ↳ Three.js & WebXR set‑up
-    //--------------------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // Three.js & WebXR initialisation
+    // ────────────────────────────────────────────────────────────
     const initThree = () => {
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera();
@@ -174,9 +179,9 @@
       renderer.setAnimationLoop(() => renderer.render(scene, camera));
     };
 
-    //--------------------------------------------------------------------------
-    // ↳ Geolocation watcher
-    //--------------------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // Geolocation
+    // ────────────────────────────────────────────────────────────
     const watchUserPosition = () => {
       if (!navigator.geolocation) {
         status.textContent = 'Geolocation unsupported';
@@ -187,30 +192,28 @@
           if (startLat === undefined) {
             startLat = p.coords.latitude;
             startLon = p.coords.longitude;
-            metersPerDegLat = 110540; // ≈ constant
+            metersPerDegLat = 110540;
             metersPerDegLon = 111320 * Math.cos(startLat * Math.PI / 180);
             status.textContent = status.textContent.replace('Loading …', '');
           }
-          // For simplicity, we don’t move the camera per frame here – just anchor at origin.
         },
         err => console.warn(err),
         { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
       );
     };
 
-    //--------------------------------------------------------------------------
-    // ↳ Events
-    //--------------------------------------------------------------------------
-    goBtn.addEventListener('click', buildChevrons);
-
-    //--------------------------------------------------------------------------
-    // ↳ Bootstrap
-    //--------------------------------------------------------------------------
-    window.addEventListener('load', () => {
+    // ────────────────────────────────────────────────────────────
+    // Bootstrapping
+    // ────────────────────────────────────────────────────────────
+    const initApp = async () => {
+      await loadMaps();
       initThree();
       watchUserPosition();
       fetchWaypoints();
-    });
+    };
+
+    window.addEventListener('load', initApp);
+    goBtn.addEventListener('click', buildChevrons);
   </script>
 </body>
 </html>
