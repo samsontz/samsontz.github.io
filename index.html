@@ -1,172 +1,331 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AR Navigation – Waypoint Edition (v5.3 • rear‑camera‑only)</title>
-
-  <!-- Three.js (non‑module build) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AR Navigation</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.155.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.155.0/examples/jsm/"
+      }
+    }
+  </script>
   <style>
-    /* --- UI & layout --- */
-    * {margin: 0; padding: 0; box-sizing: border-box;}
-    body {font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: #000; color: #fff; overflow: hidden;}
-    #video, #canvas {position: absolute; inset: 0; width: 100vw; height: 100vh;}
-    #canvas {pointer-events: none; z-index: 2;}
-    #video  {object-fit: cover; z-index: 1;}
-    .ui-overlay {position: absolute; z-index: 3; font-weight: 500;}
-    .top-bar {top: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,.7); padding: 15px 20px; border-radius: 24px; backdrop-filter: blur(8px);}
-    .distance-time {font-size: 18px; font-weight: 600;}
-    .eta {opacity: .8; font-size: 14px;}
-    .compass {width: 50px; height: 50px; border: 2px solid rgba(255,255,255,.35); border-radius: 50%; display: flex; align-items: center; justify-content: center;}
-    .compass-needle {width: 3px; height: 20px; background: #4285f4; border-radius: 2px; transform-origin: bottom center; transition: transform .3s;}
-    .bottom-controls {bottom: 24px; left: 20px; right: 20px; display: flex; justify-content: space-between; align-items: center;}
-    .control-btn {background: rgba(0,0,0,.8); backdrop-filter: blur(8px); border: none; color: #fff; width: 54px; height: 54px; font-size: 24px; border-radius: 50%; cursor: pointer; transition: .25s; display: flex; align-items: center; justify-content: center;}
-    .control-btn:hover {background: rgba(255,255,255,.25); transform: scale(1.1);}
-    .center-crosshair {position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 32px; height: 32px; border: 2px solid rgba(255,255,255,.6); border-radius: 50%; pointer-events: none; z-index: 4;}
-    .center-crosshair::before {content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 6px; height: 6px; background: rgba(255,255,255,.85); border-radius: 50%;}
-    .status-indicator {position: absolute; top: 92px; right: 20px; background: rgba(0,0,0,.8); padding: 10px 16px; border-radius: 20px; font-size: 12px; backdrop-filter: blur(8px);}
-    .gps-accuracy {color: #4caf50;}
-    .gps-searching {color: #ff9800;}
-    /* permission overlay */
-    #permOverlay {position: fixed; inset: 0; background: rgba(0,0,0,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; z-index: 1000;}
-    #permOverlay.hidden {display: none;}
-    #permOverlay button {padding: 14px 28px; font-size: 17px; border: none; border-radius: 6px; background: #4285f4; color: #fff; cursor: pointer;}
-    #permOverlay button:hover {background: #2a6ad3;}
-    @keyframes pulse {0%,100% {transform: scale(1); opacity:1} 50% {transform: scale(1.25); opacity:.65}}
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+    }
+    #enter-ar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 999;
+      padding: 12px 24px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    #enter-ar:hover {
+      background: #0056b3;
+    }
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      display: none;
+      text-align: center;
+    }
+    #debug {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      font-size: 12px;
+      border-radius: 4px;
+      max-width: 80%;
+      word-wrap: break-word;
+      display: none;
+    }
+    #orientation {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      font-size: 14px;
+      border-radius: 4px;
+      display: none;
+    }
   </style>
 </head>
 <body>
+  <button id="enter-ar">Enter AR</button>
+  <div id="loading">Loading navigation...</div>
+  <div id="debug"></div>
+  <div id="orientation"></div>
+	<script type="module">
+  import * as THREE from 'three';
+  import { ARButton } from 'three/addons/webxr/ARButton.js';
 
-  <video id="video" playsinline muted></video>
-  <canvas id="canvas"></canvas>
+  /**********************  BASIC THREE / WEB‑XR SET‑UP  **********************/
+  const scene   = new THREE.Scene();
+  const camera  = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 20);
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setPixelRatio(devicePixelRatio);
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
 
-  <!-- overlays -->
-  <div class="center-crosshair"></div>
-  <div class="ui-overlay top-bar">
-    <div><div id="distanceTime" class="distance-time">—</div><div id="eta" class="eta">Stand by…</div></div>
-    <div class="compass"><div id="compassNeedle" class="compass-needle"></div></div>
-  </div>
-  <div class="ui-overlay bottom-controls">
-    <button id="recenterBtn" class="control-btn" title="Re‑center">🔄</button>
-    <button id="calibrateBtn" class="control-btn" title="Calibrate">🧭</button>
-  </div>
-  <div id="statusIndicator" class="ui-overlay status-indicator"><span class="gps-searching">📡 Searching GPS…</span></div>
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
+  const dirLight = new THREE.DirectionalLight(0xffffff, .8);
+  dirLight.position.set(0,10,0);
+  scene.add(dirLight);
 
-  <!-- permission prompt -->
-  <div id="permOverlay">
-    <h2 style="max-width:320px;text-align:center">This AR demo needs your camera, location and motion sensors.</h2>
-    <p id="permMessage" style="max-width:320px;text-align:center"></p>
-    <button id="permBtn">Grant permissions</button>
-  </div>
+  const debugEl       = document.getElementById('debug');
+  const orientEl      = document.getElementById('orientation');
+  const loadingEl     = document.getElementById('loading');
+  const log = m => { console.log(m); debugEl.style.display='block'; debugEl.textContent += m+'\n'; };
 
-  <script>
-  /* === helper math === */
-  const R=6371e3, DEG=Math.PI/180;
-  const dist=(a,b)=>{const φ1=a.lat*DEG,φ2=b.lat*DEG,dφ=(b.lat-a.lat)*DEG,dλ=(b.lng-a.lng)*DEG;const h=Math.sin(dφ/2)**2+Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;return 2*R*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));};
-  const toXY=(o,p)=>{const m=(o.lat+p.lat)/2*DEG;return{x:R*(p.lng-o.lng)*DEG*Math.cos(m),z:R*(p.lat-o.lat)*DEG};};
+  /**********************  DEVICE SENSORS  **********************************/
+  /* Compass -------------------------------------------------------------- */
+  let deviceHeading = 0;          // degrees   (0 ≈ North, CW)
+  if ('DeviceOrientationEvent' in window) {
+    window.addEventListener('deviceorientation', e=>{
+      if (e.alpha != null) { deviceHeading = e.alpha; orientEl.textContent = `Heading: ${Math.round(deviceHeading)}°`; orientEl.style.display='block'; }
+    }, true);
+  } else { log('⚠️ DeviceOrientation not supported'); }
 
-  const API='https://waypoints-prht.onrender.com/get-waypoints/';
+  /* Geolocation ---------------------------------------------------------- */
+  let userPos = null;             // {lat,lng}
+  if ('geolocation' in navigator) {
+    navigator.geolocation.watchPosition(
+      ({coords}) => userPos = { lat: coords.latitude, lng: coords.longitude },
+      err       => log(`Geolocation error: ${err.message}`),
+      { enableHighAccuracy:true, maximumAge:1000, timeout:10000 }
+    );
+  } else { log('⚠️ Geolocation not supported'); }
 
-  /* === global state === */
-  let renderer,scene,camera,arrowGroup;
-  let cur=null, base=null, fetched=[], wps=[], scale=0.08; let gotGeo=false,gotWps=false;
+  /**********************  GEO HELPERS  ************************************/
+  const R = 6371000; // metres
+  const toRad = d=>d*Math.PI/180;
 
-  /* ===== permissions ===== */
-  const overlay=document.getElementById('permOverlay');
-  const msg=document.getElementById('permMessage');
-  document.getElementById('permBtn').onclick=async()=>{
+  function bearingBetween(lat1, lon1, lat2, lon2){
+    const φ1 = toRad(lat1), φ2 = toRad(lat2);
+    const Δλ = toRad(lon2 - lon1);
+    const y  = Math.sin(Δλ) * Math.cos(φ2);
+    const x  = Math.cos(φ1)*Math.sin(φ2) -
+               Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+    return (Math.atan2(y,x)*180/Math.PI + 360) % 360; // degrees CW from North
+  }
+
+  function relativeXZ(fromLat, fromLon, toLat, toLon){
+    const φm = toRad((fromLat+toLat)/2);
+    return {
+      x :  R * toRad(toLon - fromLon) * Math.cos(φm), // East‑West (X)
+      z :  R * toRad(toLat - fromLat)                // North‑South (Z)
+    };
+  }
+
+  /**********************  VISUAL BUILDERS  *********************************/
+  function createRoadArrow(scale=1){
+    const shape = new THREE.Shape()
+      .moveTo(-0.5, -0.5).lineTo(0,0.5).lineTo(0.5,-0.5).lineTo(-0.5,-0.5);
+    const geo  = new THREE.ShapeGeometry(shape);
+    const mat  = new THREE.MeshStandardMaterial({ color:0xffff00, emissive:0xffff00, emissiveIntensity:.5, transparent:true, opacity:.9, side:THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = -Math.PI/2;
+    mesh.scale.setScalar(.3*scale);
+    return mesh;
+  }
+
+  function createDestinationMarker(){
+    const group = new THREE.Group();
+    const pinMat = new THREE.MeshStandardMaterial({ color:0xb01020, emissive:0xb01020, emissiveIntensity:.4 });
+
+    const top   = new THREE.Mesh(new THREE.CylinderGeometry(.4,.3,.6,6), pinMat);
+    const inner = new THREE.Mesh(new THREE.CylinderGeometry(.15,.15,.1,6), new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xffffff, emissiveIntensity:.3}));
+    inner.position.y = .31;
+
+    const tip   = new THREE.Mesh(new THREE.ConeGeometry(.1,.4,16), pinMat);
+    tip.position.y = -.4;
+
+    group.add(top, inner, tip);
+    group.position.y = 1; // 1 m above ground
+    return group;
+  }
+
+  /**********************  ROUTE & WAYPOINTS  *******************************/
+  let finalWaypoint   = null;      // full {lat,lng}
+  let scaleFactor     = 1;         // metres → XR units
+  const pathGroup     = new THREE.Group(); // everything we draw
+  scene.add(pathGroup);
+
+  async function loadWaypoints(){
+    const routeId = new URLSearchParams(location.search).get('routeId');
+    if(!routeId){ log('No routeId query parameter.'); return []; }
+    const res  = await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${routeId}`);
+    const json = await res.json();
+    return json.waypoints ?? [];
+  }
+
+  async function initWaypoints(){
+    loadingEl.style.display='block'; debugEl.textContent='';
     try{
-      msg.textContent='Requesting rear camera…';
-      await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:'environment'}}});
-      msg.textContent='Requesting location…';
-      await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej));
-      if(DeviceOrientationEvent?.requestPermission){msg.textContent='Requesting motion sensors…';await DeviceOrientationEvent.requestPermission();}
-      overlay.classList.add('hidden');
-      startApp();
-    }catch(e){msg.textContent='Permission denied (need rear‑camera).';console.error(e);} };
+      const wps = await loadWaypoints();
+      if(!wps.length) throw new Error('No waypoints received.');
 
-  /* ===== camera ===== */
-  async function initCamera(){
-    const v=document.getElementById('video');
-    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:'environment'}}});
-    v.srcObject=s; await new Promise(r=>v.onloadedmetadata=r); await v.play();
-  }
+      /* --------- distance‑based thinning (≥5 m apart) ------------------ */
+      const kept = [];
+      wps.forEach((wp,i)=>{
+        if(!wp.lat||!wp.lng) return;
+        if(!kept.length){ kept.push(wp); return; }
+        const last = kept[kept.length-1];
+        const d = THREE.MathUtils.euclideanDistance(
+          ...Object.values(relativeXZ(last.lat,last.lng,wp.lat,wp.lng))
+        );
+        if(d>5) kept.push(wp);
+      });
+      log(`Waypoints: ${wps.length} → kept ${kept.length}`);
 
-  /* ===== three.js ===== */
-  function initThree(){
-    renderer=new THREE.WebGLRenderer({canvas:document.getElementById('canvas'),alpha:true,antialias:true});
-    renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);
-    scene=new THREE.Scene();
-    camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.01,1000);
-    camera.position.set(0,1.6,0);
-    scene.add(new THREE.AmbientLight(0xffffff,0.8));
-    const dl=new THREE.DirectionalLight(0xffffff,0.7);dl.position.set(15,25,8);scene.add(dl);
-    arrowGroup=new THREE.Group();scene.add(arrowGroup);
-  }
-
-  /* ===== orientation ===== */
-  function initOrientation(){
-    const h=e=>{const a=e.alpha||0,b=e.beta||0;document.getElementById('compassNeedle').style.transform=`rotate(${360-a}deg)`;camera.rotation.set(b*DEG,a*DEG,0,'YXZ');};
-    if(DeviceOrientationEvent?.requestPermission){DeviceOrientationEvent.requestPermission().then(r=>{if(r==='granted')addEventListener('deviceorientation',h);});}else addEventListener('deviceorientation',h);
-  }
-
-  /* ===== geolocation ===== */
-  function initGeo(){navigator.geolocation.watchPosition(p=>{cur={lat:p.coords.latitude,lng:p.coords.longitude};if(!base){base={...cur};gotGeo=true;buildWhenReady();}updateHUD();shift();},err=>console.error(err),{enableHighAccuracy:true,timeout:10000,maximumAge:3000});}
-
-  /* ===== waypoints ===== */
-  async function fetchWps(){
-      const id=new URLSearchParams(location.search).get('routeId');
-      if(!id){throw new Error('Missing ?routeId parameter');}
-      const res=await fetch(API+id).catch(()=>null);
-      if(!res||!res.ok) throw new Error('Unable to reach waypoint server');
-      const data=await res.json().catch(()=>({}));
-      if(!Array.isArray(data.waypoints)||data.waypoints.length===0){
-        throw new Error('No waypoints found for routeId "'+id+'"');
+      /* --------- choose scale so farthest point sits ≈20 m ------------- */
+      let far = 0;
+      for(const wp of kept){
+        const Δ = relativeXZ(kept[0].lat, kept[0].lng, wp.lat, wp.lng);
+        far = Math.max(far, Math.sqrt(Δ.x**2 + Δ.z**2));
       }
-      return data.waypoints;
-  }(d.waypoints)?d.waypoints:[];}
-  function prepWps(){const rel=p=>({...p,rel:toXY(base,p)});wps=[{...base,rel:{x:0,z:0}}].concat(fetched.map(rel));}
+      scaleFactor = far>0 ? 20/far : 1;
+      log(`scaleFactor = ${scaleFactor.toFixed(3)} for furthest ${far.toFixed(1)} m`);
 
-  /* ===== meshes ===== */
-  const mkArrow=(()=>{const shaftG=new THREE.CylinderGeometry(0.06,0.06,0.9,8),headG=new THREE.ConeGeometry(0.14,0.28,12);
-    return()=>{const g=new THREE.Group();const shaft=new THREE.Mesh(shaftG,new THREE.MeshLambertMaterial({color:0x00ff40}));shaft.rotation.x=Math.PI/2;shaft.position.z=0.45;g.add(shaft);const head=new THREE.Mesh(headG,new THREE.MeshLambertMaterial({color:0xff2020}));head.rotation.x=Math.PI/2;head.position.z=0.9;g.add(head);g.userData.p=Math.random()*Math.PI*2;return g;};})();
-  function mkPin(){const g=new THREE.Group(),red=new THREE.MeshLambertMaterial({color:0xc41230,emissive:0xc41230});g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.35,0.6,6),red));const core=new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.18,0.1,6),new THREE.MeshLambertMaterial({color:0xffffff}));core.position.y=0.33;g.add(core);const tip=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.45,14),red);tip.position.y=-0.45;g.add(tip);return g;}
+      /* --------- build visuals inside pathGroup ------------------------ */
+      pathGroup.clear();
 
-  /* ===== build scene ===== */
-  function buildScene(){arrowGroup.clear();if(wps.length<2)return;const far=Math.max(...wps.map(p=>Math.hypot(p.rel.x,p.rel.z)));scale=25/Math.max(far,25);
-    const dst=wps[wps.length-1].rel;const pin=mkPin();pin.scale.setScalar(2*scale);pin.position.set(dst.x*scale,0,dst.z*scale);arrowGroup.add(pin);
-    for(let i=0;i<wps.length-1;i++){const a=wps[i].rel,b=wps[i+1].rel,dx=b.x-a.x,dz=b.z-a.z,l=Math.hypot(dx,dz),yaw=Math.atan2(dx,dz);const n=Math.max(3,Math.floor(l/8));for(let j=0;j<n;j++){const t=(j+0.5)/n,m=mkArrow();m.rotation.y=-yaw;m.scale.setScalar(4*scale);m.position.set((a.x+dx*t)*scale,0.03,(a.z+dz*t)*scale);arrowGroup.add(m);}}shift();}
+      // destination pin (will be re‑positioned each frame)
+      finalWaypoint = kept[kept.length-1];
+      const destPin = createDestinationMarker();
+      pathGroup.add(destPin);
+      destPin.name = 'destPin';
 
-  /* ===== scene shift ===== */
-  function shift(){if(!cur||!base)return;const d=toXY(base,cur);arrowGroup.position.set(-d.x*scale,0,-d.z*scale);}
+      // yellow arrows
+      for(let i=0;i<kept.length-1;i++){
+        const A = kept[i], B = kept[i+1];
+        const seg = relativeXZ(A.lat,A.lng,B.lat,B.lng);
+        const len = Math.sqrt(seg.x**2 + seg.z**2);
+        const bearing = Math.atan2(seg.x, seg.z); // radians from +Z
 
-  /* ===== HUD ===== */
-  function updateHUD(){if(!cur||!wps.length)return;const m=dist(cur,wps[wps.length-1]),km=m/1000;document.getElementById('distanceTime').textContent=`${km<1?Math.round(m)+' m':km.toFixed(1)+' km'} • ${Math.round(km*2)} min`;const eta=new Date();eta.setMinutes(eta.getMinutes()+Math.round(km*2));document.getElementById('eta').textContent=`ETA ${eta.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;}
+        const arrowEvery = 5; // m
+        const nArrows = Math.max(3, Math.floor(len/arrowEvery));
+        for(let j=0;j<nArrows;j++){
+          const t = j/nArrows;
+          const posXZ = {
+            x: THREE.MathUtils.lerp(0, seg.x, t),
+            z: THREE.MathUtils.lerp(0, seg.z, t)
+          };
+          const arrow = createRoadArrow(1 + .5*t);          // grow nearer dest
+          arrow.position.set(posXZ.x*scaleFactor, 0, posXZ.z*scaleFactor);
+          arrow.rotation.y = -bearing;
+          pathGroup.add(arrow);
+        }
+      }
 
-  /* ===== render loop ===== */
-  function loop(){requestAnimationFrame(loop);arrowGroup.children.forEach(o=>{if(o.userData?.p!==undefined){o.userData.p+=0.04;o.scale.y=(1+0.25*Math.sin(o.userData.p))*4*scale;}});renderer.render(scene,camera);}
+      /* --------- store route bearing (1st → 2nd) for orientation --------*/
+      const brg = kept.length>1
+        ? bearingBetween(kept[0].lat, kept[0].lng, kept[1].lat, kept[1].lng)
+        : 0;
+      pathGroup.userData.routeBearing = brg; // degrees
 
-  /* ===== orchestration ===== */
-  function buildWhenReady(){if(gotGeo&&gotWps){prepWps();buildScene();loop();}}
-  async function startApp(){try{await initCamera();initThree();initOrientation();initGeo();
-    try{
-      fetched=await fetchWps();
-      gotWps=true;
-      buildWhenReady();
-    }catch(err){
-      overlay.classList.remove('hidden');
-      msg.textContent=err.message;
-      console.error(err);
-      return;
+      loadingEl.style.display='none';
+    }catch(e){
+      log('initWaypoints error: '+e.message);
+      loadingEl.textContent = 'Error loading waypoints';
     }
-    addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});document.getElementById('recenterBtn').onclick=()=>camera.position.set(0,1.6,0);
-  }catch(e){overlay.classList.remove('hidden');msg.textContent='Error: '+e.message;console.error(e);}}
+  }
 
-  /* HTTPS notice */
-  msg.textContent=location.protocol==='https:'?'Tap "Grant permissions" then allow requests.':'This page must be served over HTTPS.';
-  if(location.protocol!=='https:')document.getElementById('permBtn').style.display='none';
-  </script>
+  /**********************  AR ENTRY & MAIN LOOP  ****************************/
+  let reticle;
+  async function startAR(){
+    if(!('xr' in navigator)){ alert('WebXR not supported'); return; }
+    if(!await navigator.xr.isSessionSupported('immersive-ar')){ alert('AR not supported');return;}
+
+    reticle = new THREE.Mesh(
+      new THREE.RingGeometry(.15,.2,32).rotateX(-Math.PI/2),
+      new THREE.MeshBasicMaterial({transparent:true,opacity:.5})
+    );
+    reticle.visible = false;
+    scene.add(reticle);
+
+    document.body.appendChild(ARButton.createButton(renderer,{
+      requiredFeatures:['hit-test'],
+      optionalFeatures:['dom-overlay'],
+      domOverlay:{root:document.body}
+    }));
+
+    /* ---- one‑time geo + compass align once reticle found ------------- */
+    let hitSource=null, refSpace=null;
+    renderer.xr.addEventListener('sessionstart', ()=>{
+      const session=renderer.xr.getSession();
+      session.requestReferenceSpace('viewer').then(vrs=>{
+        refSpace=vrs;
+        session.requestHitTestSource({space:vrs}).then(src=>hitSource=src);
+      });
+      log('XR session started');
+    });
+
+    renderer.setAnimationLoop((time,frame)=>{
+      /* ---- hit‑test (for reticle) ------------------------------------ */
+      if(frame && hitSource && refSpace){
+        const hits = frame.getHitTestResults(hitSource);
+        if(hits.length){
+          const pose = hits[0].getPose(refSpace);
+          reticle.matrix.fromArray(pose.transform.matrix);
+          reticle.visible = true;
+        }
+      }
+
+      /* ---- when we have userPos & finalWaypoint: update dest pin ----- */
+      const destPin = pathGroup.getObjectByName('destPin');
+      if(userPos && finalWaypoint && destPin){
+        const rel = relativeXZ(userPos.lat,userPos.lng, finalWaypoint.lat,finalWaypoint.lng);
+        destPin.position.set(rel.x*scaleFactor, 0, rel.z*scaleFactor);
+      }
+
+      /* ---- continuous compass alignment ------------------------------ */
+      const routeBearing = pathGroup.userData.routeBearing ?? 0;
+      const yawOffset    = THREE.MathUtils.degToRad(deviceHeading - routeBearing);
+      pathGroup.rotation.y = -yawOffset;  // negate because +Y is up
+
+      renderer.render(scene,camera);
+    });
+  }
+
+  /**********************  UI HOOKS  ***************************************/
+  document.getElementById('enter-ar').addEventListener('click', async ()=>{
+    await startAR();
+    await initWaypoints();
+    document.getElementById('enter-ar').style.display='none';
+  });
+
+  addEventListener('resize', ()=>{
+    if(!renderer.xr.isPresenting){
+      camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth,innerHeight);
+    }
+  });
+</script>
+
+  
 </body>
 </html>
