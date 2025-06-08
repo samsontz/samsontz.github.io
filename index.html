@@ -18,27 +18,19 @@
   <!-- ───── Basic styles ──────────────────────────────────────────── -->
   <style>
     body { margin:0; overflow:hidden; font-family:Arial, sans-serif; }
-    #enter-ar {
-      position:absolute; top:10px; left:10px; z-index:999;
+    #enter-ar { position:absolute; top:10px; left:10px; z-index:999;
       padding:12px 24px; background:#007bff; color:#fff;
-      border:none; border-radius:4px; cursor:pointer; font-size:16px;
-    }
+      border:none; border-radius:4px; cursor:pointer; font-size:16px; }
     #enter-ar:hover { background:#0056b3; }
-    #loading {
-      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    #loading { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
       background:rgba(0,0,0,.8); color:#fff; padding:20px; border-radius:8px;
-      display:none; text-align:center;
-    }
-    #debug {
-      position:absolute; bottom:10px; left:10px;
+      display:none; text-align:center; }
+    #debug { position:absolute; bottom:10px; left:10px;
       background:rgba(0,0,0,.7); color:#fff; padding:10px; font-size:12px;
-      border-radius:4px; max-width:80%; word-wrap:break-word; display:none;
-    }
-    #orientation {
-      position:absolute; top:10px; right:10px;
+      border-radius:4px; max-width:80%; word-wrap:break-word; display:none; }
+    #orientation { position:absolute; top:10px; right:10px;
       background:rgba(0,0,0,.7); color:#fff; padding:10px; font-size:14px;
-      border-radius:4px; display:none;
-    }
+      border-radius:4px; display:none; }
   </style>
 </head>
 
@@ -50,251 +42,193 @@
 
   <!-- ───── AR logic ──────────────────────────────────────────────── -->
   <script type="module">
-/* ─── Imports ──────────────────────────────────────────────── */
 import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 
-/* ─── DOM helpers ──────────────────────────────────────────── */
+/* ---------- helpers ---------- */
 const $ = id => document.getElementById(id);
-const log = (m)=>{                           // rolling debug logger
+const log = m=>{
   console.log(m);
-  const dbg = $('debug');
-  const lines = dbg.textContent.split('\n').slice(-19).concat(m);
-  dbg.textContent = lines.join('\n');
-  dbg.style.display = 'block';
+  const dbg=$('debug');
+  dbg.textContent = dbg.textContent.split('\n').slice(-19).concat(m).join('\n');
+  dbg.style.display='block';
 };
 
-/* ─── THREE / XR bootstrap ─────────────────────────────────── */
-const scene    = new THREE.Scene();
-const camera   = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 20);
+/* ---------- THREE setup ---------- */
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, .01, 20);
 const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.autoClear = false;                      // keep camera feed visible
+renderer.setClearColor(0x000000, 0);             // fully‑transparent clear
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
-const sun = new THREE.DirectionalLight(0xffffff, .8);
-sun.position.set(3,10,2);
+scene.add(new THREE.HemisphereLight(0xffffff,0xbbbbff,1));
+const sun=new THREE.DirectionalLight(0xffffff,.8); sun.position.set(3,10,2);
 scene.add(sun);
 
-/* ─── Globals for the route ────────────────────────────────── */
-const pathGroup   = new THREE.Group();  scene.add(pathGroup);
-let startWP  = null;      // first waypoint
-let destWP   = null;      // last waypoint
-let scaleF   = 1;         // metres → XR units
-const R   = 6371000;
-const toR = d=>d*Math.PI/180;
+/* ---------- route globals ---------- */
+const pathGroup=new THREE.Group(); scene.add(pathGroup);
+let startWP=null, destWP=null, scaleF=1;
+const R=6371000, toR=d=>d*Math.PI/180;
 
-/* ─── Device sensors ───────────────────────────────────────── */
-let deviceHeading = 0;
+/* ---------- sensors ---------- */
+let deviceHeading=0;
 (function initHeading(){
-  if (!('DeviceOrientationEvent' in window)) return log('No compass');
-  const handler = e=>{
-    const raw = e.webkitCompassHeading ?? e.alpha;
-    if (raw==null) return;
-    // simple exponential smoothing
-    const α = .15;
-    deviceHeading += α * (raw - deviceHeading);
+  if(!('DeviceOrientationEvent' in window)) return log('No compass');
+  const handler=e=>{
+    const raw=e.webkitCompassHeading ?? e.alpha;
+    if(raw==null) return;
+    deviceHeading += .15*(raw-deviceHeading);      // smooth
     $('orientation').style.display='block';
-    $('orientation').textContent = `Heading: ${Math.round(deviceHeading)}°`;
+    $('orientation').textContent=`Heading: ${Math.round(deviceHeading)}°`;
   };
-
-  if (typeof DeviceOrientationEvent.requestPermission === 'function') { // iOS
-    $('orientation').textContent = 'Tap to enable compass'; $('orientation').style.display='block';
+  if(typeof DeviceOrientationEvent.requestPermission==='function'){
+    $('orientation').textContent='Tap to enable compass';
+    $('orientation').style.display='block';
     $('orientation').onclick=async()=>{
-      try{ const r=await DeviceOrientationEvent.requestPermission();
-        if(r==='granted') window.addEventListener('deviceorientation',handler,true);
+      try{
+        if(await DeviceOrientationEvent.requestPermission()==='granted')
+          window.addEventListener('deviceorientation',handler,true);
       }catch(e){ alert('Compass permission denied'); }
     };
-  } else {
-    window.addEventListener('deviceorientation', handler, true);
-  }
+  }else window.addEventListener('deviceorientation',handler,true);
 })();
-
 let userPos=null;
 navigator.geolocation.watchPosition(
-  pos=>{ userPos={lat:pos.coords.latitude,lng:pos.coords.longitude}; },
-  err=>log('GPS error: '+err.message),
-  { enableHighAccuracy:true, maximumAge:3e3, timeout:15e3 }
-);
+  p=>{userPos={lat:p.coords.latitude,lng:p.coords.longitude};},
+  e=>log('GPS error: '+e.message),
+  {enableHighAccuracy:true, maximumAge:3000, timeout:15000});
 
-/* ─── Geometry helpers ─────────────────────────────────────── */
-const relXZ = (φ1,λ1,φ2,λ2)=>{
-  const φm = toR((φ1+φ2)/2);
-  return {
-    x : R * toR(λ2-λ1) * Math.cos(φm),
-    z : R * toR(φ2-φ1)
-  };
+/* ---------- geo math ---------- */
+const relXZ=(φ1,λ1,φ2,λ2)=>{
+  const φm=toR((φ1+φ2)/2);
+  return{ x:R*toR(λ2-λ1)*Math.cos(φm), z:R*toR(φ2-φ1)};
 };
-const bearingBetween = (φ1,λ1,φ2,λ2)=>{
-  const y = Math.sin(toR(λ2-λ1))*Math.cos(toR(φ2));
-  const x = Math.cos(toR(φ1))*Math.sin(toR(φ2)) -
-            Math.sin(toR(φ1))*Math.cos(toR(φ2))*Math.cos(toR(λ2-λ1));
-  return (Math.atan2(y,x)*180/Math.PI + 360) % 360;
+const bearingBetween=(φ1,λ1,φ2,λ2)=>{
+  const y=Math.sin(toR(λ2-λ1))*Math.cos(toR(φ2));
+  const x=Math.cos(toR(φ1))*Math.sin(toR(φ2))-
+          Math.sin(toR(φ1))*Math.cos(toR(φ2))*Math.cos(toR(λ2-λ1));
+  return(Math.atan2(y,x)*180/Math.PI+360)%360;
 };
 
-/* ─── Mesh factories ───────────────────────────────────────── */
-const makeArrow = (scale=1)=>{
-  const s=new THREE.Shape().moveTo(-.5,-.5).lineTo(0,.5).lineTo(.5,-.5).lineTo(-.5,-.5);
-  const g=new THREE.ShapeGeometry(s);
-  const m=new THREE.MeshStandardMaterial({color:0xffff00,emissive:0xffff00,
-                                          emissiveIntensity:.5,transparent:true,opacity:.9,
-                                          side:THREE.DoubleSide});
-  const mesh=new THREE.Mesh(g,m);
-  mesh.rotation.x=-Math.PI/2;
-  mesh.scale.setScalar(.25*scale);
-  return mesh;
+/* ---------- meshes ---------- */
+const makeArrow=s=>{
+  const shape=new THREE.Shape().moveTo(-.5,-.5).lineTo(0,.5).lineTo(.5,-.5).lineTo(-.5,-.5);
+  const mesh=new THREE.Mesh(
+    new THREE.ShapeGeometry(shape),
+    new THREE.MeshStandardMaterial({color:0xffff00,emissive:0xffff00,
+      emissiveIntensity:.5,transparent:true,opacity:.9,side:THREE.DoubleSide}));
+  mesh.rotation.x=-Math.PI/2; mesh.scale.setScalar(.25*s); return mesh;
 };
-const makePin = ()=>{
-  const grp = new THREE.Group();
-  const red = new THREE.MeshStandardMaterial({color:0xb01020, emissive:0xb01020, emissiveIntensity:.4});
-  grp.add(new THREE.Mesh(new THREE.CylinderGeometry(.4,.3,.6,6), red));
-  grp.add(new THREE.Mesh(new THREE.ConeGeometry(.1,.4,16), red)).position.y=-.5;
-  grp.position.y=1;
-  return grp;
+const makePin=()=>{
+  const g=new THREE.Group();
+  const mat=new THREE.MeshStandardMaterial({color:0xb01020,emissive:0xb01020,emissiveIntensity:.4});
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(.4,.3,.6,6),mat));
+  g.add(new THREE.Mesh(new THREE.ConeGeometry(.1,.4,16),mat)).position.y=-.5;
+  g.position.y=1; return g;
 };
 
-/* ─── Fetch + build route ──────────────────────────────────── */
+/* ---------- route builder ---------- */
 async function buildRoute(){
   $('loading').style.display='block';
-  const id = new URLSearchParams(location.search).get('routeId');
-  if(!id){ $('loading').textContent='Missing routeId'; throw 'no-id'; }
-  const res = await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${id}`);
-  if(!res.ok){ $('loading').textContent=`HTTP ${res.status}`; throw 'fetch'; }
-  const data = await res.json();
-  const wps  = data.waypoints ?? data.data?.waypoints ?? [];
-  if(!wps.length){ $('loading').textContent='No waypoints'; throw 'empty'; }
+  const id=new URLSearchParams(location.search).get('routeId');
+  if(!id){$('loading').textContent='Missing routeId';throw'no-id';}
+  const res=await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${id}`);
+  if(!res.ok){$('loading').textContent=`HTTP ${res.status}`;throw'fetch';}
+  const wps=(await res.json()).waypoints||[];
+  if(!wps.length){$('loading').textContent='No waypoints';throw'empty';}
 
-  /* thin – keep first, last, and >5 m apart */
   const kept=[wps[0]];
   for(const w of wps.slice(1)){
-    const last=kept.at(-1);
-    const d = Math.hypot(...Object.values(relXZ(last.lat,last.lng,w.lat,w.lng)));
+    const d=Math.hypot(...Object.values(relXZ(kept.at(-1).lat,kept.at(-1).lng,w.lat,w.lng)));
     if(d>5) kept.push(w);
   }
-  startWP = kept[0]; destWP = kept.at(-1);
+  startWP=kept[0]; destWP=kept.at(-1);
 
-  /* scale so furthest = 20 m */
-  let far=0;
-  for(const w of kept){
-    const d = Math.hypot(...Object.values(relXZ(startWP.lat,startWP.lng,w.lat,w.lng)));
-    far=Math.max(far,d);
-  }
-  scaleF = far?20/far:1;
-
-  /* draw */
+  scaleF=20/Math.max(...kept.map(w=>Math.hypot(...Object.values(relXZ(startWP.lat,startWP.lng,w.lat,w.lng)))));
   pathGroup.clear();
-  const destPin = makePin(); destPin.name='dest'; pathGroup.add(destPin);
+
+  const pin=makePin(); pin.name='dest'; pathGroup.add(pin);
+
   kept.forEach((A,i)=>{
     if(i===kept.length-1) return;
-    const B=kept[i+1];
-    const seg=relXZ(A.lat,A.lng,B.lat,B.lng);
-    const len=Math.hypot(seg.x,seg.z);
-    const bearing=Math.atan2(seg.x,seg.z);
+    const B=kept[i+1], seg=relXZ(A.lat,A.lng,B.lat,B.lng);
+    const len=Math.hypot(seg.x,seg.z), bearing=Math.atan2(seg.x,seg.z);
     const n=Math.max(3,Math.floor(len/5));
     for(let j=0;j<n;j++){
-      const t=j/n;
-      const arrow=makeArrow(1+.5*t);
-      const geo={ lat:A.lat+(B.lat-A.lat)*t, lng:A.lng+(B.lng-A.lng)*t };
+      const t=j/n, geo={lat:A.lat+(B.lat-A.lat)*t,lng:A.lng+(B.lng-A.lng)*t};
       const p=relXZ(startWP.lat,startWP.lng,geo.lat,geo.lng);
-      arrow.position.set(p.x*scaleF,0,p.z*scaleF);
-      arrow.rotation.y=-bearing;
-      pathGroup.add(arrow);
+      const a=makeArrow(1+.5*t); a.position.set(p.x*scaleF,0,p.z*scaleF); a.rotation.y=-bearing;
+      pathGroup.add(a);
     }
   });
-
-  pathGroup.userData.bearing = kept.length>1
-      ? bearingBetween(kept[0].lat,kept[0].lng, kept[1].lat,kept[1].lng)
-      : 0;
-
+  pathGroup.userData.bearing=bearingBetween(kept[0].lat,kept[0].lng,kept[1].lat,kept[1].lng);
   $('loading').style.display='none';
 }
 
-/* ─── XR session helpers ───────────────────────────────────── */
+/* ---------- XR helpers ---------- */
 let reticle, hitSrc=null, refSpace=null;
-function endSession(){
-  const s = renderer.xr.getSession();
-  if(s) s.end();
-}
-function cleanUp(){
-  if(hitSrc){ hitSrc.cancel(); hitSrc=null; }
-  window.removeEventListener('resize',onResize);
-}
+function endSession(){ const s=renderer.xr.getSession(); if(s) s.end(); }
+function cleanUp(){ if(hitSrc){hitSrc.cancel(); hitSrc=null;} window.removeEventListener('resize',onResize); }
+const onResize=()=>{ if(!renderer.xr.isPresenting){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);} };
 
-function onResize(){
-  if(!renderer.xr.isPresenting){
-    camera.aspect=innerWidth/innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth,innerHeight);
-  }
-}
-
-/* ─── Main entry points ────────────────────────────────────── */
-$('enter-ar').onclick = async ()=>{
+/* ---------- main ---------- */
+$('enter-ar').onclick=async()=>{
   try{
-    await buildRoute();          // ensure we have data first
-    await startAR();
-    $('enter-ar').style.display='none';
+    await buildRoute(); await startAR(); $('enter-ar').style.display='none';
   }catch(e){ log('Cannot start AR: '+e); }
 };
 
 async function startAR(){
-  if(!('xr' in navigator)) return alert('WebXR unsupported');
-  if(!(await navigator.xr.isSessionSupported('immersive-ar')))
-     return alert('AR not supported');
+  if(!('xr' in navigator))  {alert('WebXR unsupported');return;}
+  if(!await navigator.xr.isSessionSupported('immersive-ar')){alert('AR not available');return;}
+  try{ await navigator.mediaDevices.getUserMedia({video:true}); }catch{ alert('Camera permission required'); return; }
 
-  reticle = new THREE.Mesh(
-    new THREE.RingGeometry(.15,.2,32).rotateX(-Math.PI/2),
-    new THREE.MeshBasicMaterial({transparent:true,opacity:.5})
-  ); reticle.visible=false; scene.add(reticle);
+  reticle=new THREE.Mesh(new THREE.RingGeometry(.15,.2,32).rotateX(-Math.PI/2),
+                         new THREE.MeshBasicMaterial({transparent:true,opacity:.5}));
+  reticle.visible=false; scene.add(reticle);
 
   document.body.appendChild(ARButton.createButton(renderer,{
-    requiredFeatures:['hit-test'],
-    optionalFeatures:['dom-overlay'],
-    domOverlay:{root:document.body}
+    requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{root:document.body}
   }));
 
-  renderer.xr.addEventListener('sessionstart', ()=>{
+  renderer.xr.addEventListener('sessionstart',()=>{
     log('XR session started');
     const s=renderer.xr.getSession();
-    s.addEventListener('end', ()=>{ log('XR ended'); cleanUp(); $('enter-ar').style.display='block'; });
-    s.requestReferenceSpace('viewer').then(vrs=>{
-      refSpace=vrs;
-      s.requestHitTestSource({space:vrs}).then(src=>hitSrc=src);
-    });
+    s.addEventListener('end',()=>{log('XR ended');cleanUp();$('enter-ar').style.display='block';});
+    s.requestReferenceSpace('viewer').then(vrs=>{refSpace=vrs;
+       s.requestHitTestSource({space:vrs}).then(src=>hitSrc=src);});
   });
 
   window.addEventListener('resize',onResize);
 
-  /* STOP button */
-  const stopBtn = document.createElement('button');
-  stopBtn.textContent='STOP AR';
-  Object.assign(stopBtn.style,{position:'absolute',bottom:'15px',right:'15px',zIndex:999,padding:'10px 20px'});
-  stopBtn.onclick=endSession;
-  document.body.appendChild(stopBtn);
+  /* create STOP button only once */
+  if(!document.getElementById('stop-ar-btn')){
+    const btn=document.createElement('button');
+    btn.id='stop-ar-btn'; btn.textContent='STOP AR';
+    Object.assign(btn.style,{position:'absolute',bottom:'15px',right:'15px',
+                             zIndex:999,padding:'10px 20px'});
+    btn.onclick=endSession; document.body.appendChild(btn);
+  }
 
-  renderer.setAnimationLoop((t,frame)=>{
-    if(frame && hitSrc && refSpace){
-      const hits = frame.getHitTestResults(hitSrc);
-      if(hits.length){
-        reticle.visible=true;
-        reticle.matrix.fromArray(hits[0].getPose(refSpace).transform.matrix);
-      } else reticle.visible=false;
+  renderer.setAnimationLoop((t,f)=>{
+    if(f&&hitSrc&&refSpace){
+      const hits=f.getHitTestResults(hitSrc);
+      reticle.visible=hits.length;
+      if(hits.length) reticle.matrix.fromArray(hits[0].getPose(refSpace).transform.matrix);
     }
-
-    if(userPos && startWP){
-      const p0 = relXZ(userPos.lat,userPos.lng,startWP.lat,startWP.lng);
-      pathGroup.position.set(p0.x*scaleF,0,p0.z*scaleF);
-
-      const dest = scene.getObjectByName('dest');
-      if(dest){
-        const v = relXZ(userPos.lat,userPos.lng,destWP.lat,destWP.lng);
-        dest.position.set(v.x*scaleF,0,v.z*scaleF);
+    if(userPos&&startWP){
+      const d=relXZ(userPos.lat,userPos.lng,startWP.lat,startWP.lng);
+      pathGroup.position.set(d.x*scaleF,0,d.z*scaleF);
+      const pin=scene.getObjectByName('dest');
+      if(pin){
+        const v=relXZ(userPos.lat,userPos.lng,destWP.lat,destWP.lng);
+        pin.position.set(v.x*scaleF,0,v.z*scaleF);
       }
-
-      const yaw = THREE.Math.degToRad(deviceHeading - pathGroup.userData.bearing);
-      pathGroup.rotation.y = -yaw;
+      pathGroup.rotation.y=-THREE.Math.degToRad(deviceHeading-pathGroup.userData.bearing);
     }
     renderer.render(scene,camera);
   });
