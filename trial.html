@@ -1,78 +1,226 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Trial — labelled waypoints</title>
-    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-    <script src="https://raw.githack.com/jeromeetienne/AR.js/3.4.0/aframe/build/aframe-ar.js"></script>
-  </head>
-  <body style="margin:0">
-    <a-scene embedded arjs="sourceType: webcam;" vr-mode-ui="enabled: false">
-      <!-- Custom component (fixed template-strings, added guards) -->
-      <script>
-        AFRAME.registerComponent('waypoints-manager', {
-          init () {
-            this.fetchAndPlace();
-            this.showOrientation();
-          },
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AR Navigation with Three.js & Google Maps</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+    }
+    #ui {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 99999;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(4px);
+      border-radius: 12px;
+      padding: 12px 16px;
+      line-height: 1.4;
+    }
+    #ui label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    #ui input {
+      width: 160px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #222;
+      color: #eee;
+      margin-bottom: 8px;
+    }
+    #ui button {
+      width: 100%;
+      padding: 6px 0;
+      border: none;
+      border-radius: 6px;
+      background: #0b84ff;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <!-- Simple UI overlay -->
+  <div id="ui">
+    <label>Destination Lat:
+      <input type="number" id="destLat" step="0.000001" placeholder="e.g. 52.520008" />
+    </label>
+    <label>Destination Lon:
+      <input type="number" id="destLon" step="0.000001" placeholder="e.g. 13.404954" />
+    </label>
+    <button id="goBtn">Draw Route</button>
+  </div>
 
-          fetchAndPlace: async function () {
-            const routeId = new URLSearchParams(location.search).get('routeId');
-            if (!routeId) { console.error('No routeId parameter in URL'); return; }
+  <!-- Google Maps JS API (⚠️ replace YOUR_API_KEY) -->
+  <script async src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=geometry"></script>
 
-            const waypointsUrl = `https://waypoints-prht.onrender.com/get-waypoints/${routeId}`;
+  <!-- Three.js & WebXR (module imports) -->
+  <script type="module" defer>
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js';
+    import { ARButton } from 'https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/webxr/ARButton.js';
 
-            try {
-              const res  = await fetch(waypointsUrl);
-              const json = await res.json();
+    // ---------------------------------------------------------------------------
+    // ↳ HTML elements
+    // ---------------------------------------------------------------------------
+    const destLatInput = document.getElementById('destLat');
+    const destLonInput = document.getElementById('destLon');
+    const goBtn        = document.getElementById('goBtn');
 
-              (json.waypoints || []).forEach((waypoint, index) => {
-                if (!waypoint.lat || !waypoint.lng) {
-                  console.error(`Invalid coordinates for waypoint ${index + 1}`);
-                  return;
-                }
+    // ---------------------------------------------------------------------------
+    // ↳ Scene globals
+    // ---------------------------------------------------------------------------
+    let scene, camera, renderer;
+    let startLat, startLon;             // First GPS fix (origin of local coords)
+    let destLat, destLon;               // Destination entered by user
+    let metersPerDegLat;                // ~111 km per ° lat
+    let metersPerDegLon;                // depends on latitude
+    const chevronGroup = new THREE.Group();
 
-                const text   = document.createElement('a-text');
-                text.setAttribute('value', `Point ${index + 1}`);
-                text.setAttribute('scale', '75 75 75');
-                text.setAttribute('align', 'center');
-                text.setAttribute('color', this.pickColor(index));
-                text.setAttribute('look-at', '[gps-camera]');
-                text.setAttribute('gps-entity-place',
-                                  `latitude: ${waypoint.lat}; longitude: ${waypoint.lng}`);
+    // ---------------------------------------------------------------------------
+    // ↳ Utility helpers
+    // ---------------------------------------------------------------------------
 
-                this.el.sceneEl.appendChild(text);
-                console.log(`Added waypoint ${index + 1} → lat ${waypoint.lat}, lon ${waypoint.lng}`);
-              });
-            } catch (err) {
-              console.error('Error fetching waypoints:', err);
-            }
-          },
+    // Convert lat/lon to a local right‑handed ENU coordinate (in metres)
+    const latLonToVector = (lat, lon) => {
+      const x = (lon - startLon) * metersPerDegLon;          // +x ‑ east
+      const z = (lat - startLat) * metersPerDegLat;          // +z ‑ north (we’ll invert later)
+      return new THREE.Vector3(x, 0, -z);                    // -z because Three.js forward is -z
+    };
 
-          pickColor: function (i) {
-            return ['red', 'blue', 'green', 'yellow', 'purple', 'orange'][i % 6];
-          },
+    // Build chevron cones along the great‑circle heading from origin → dest
+    const buildChevrons = () => {
+      // Wipe any previous route
+      chevronGroup.children.length = 0;
 
-          showOrientation: function () {
-            const overlay = document.createElement('div');
-            overlay.style.cssText =
-              'position:fixed;top:0;left:0;right:0;padding:.3rem .6rem;' +
-              'font:12px monospace;background:rgba(0,0,0,.6);color:#0f0;z-index:10;';
-            document.body.appendChild(overlay);
+      // Safety: ensure Google Maps has loaded
+      if (!window.google || !google.maps || !google.maps.geometry) {
+        alert('Google Maps API still loading. Try again in a second …');
+        return;
+      }
 
-            const update = () => {
-              const so = screen.orientation || {};
-              overlay.textContent =
-                `alpha: ${so.alpha ?? 'N/A'} | beta: ${so.beta ?? 'N/A'} | gamma: ${so.gamma ?? 'N/A'}`;
-            };
-            window.addEventListener('deviceorientation', update);
-            update();
+      const origin = new google.maps.LatLng(startLat, startLon);
+      const target = new google.maps.LatLng(destLat,  destLon);
+
+      const distance = google.maps.geometry.spherical.computeDistanceBetween(origin, target); // m
+      const heading  = google.maps.geometry.spherical.computeHeading(origin, target);          // °
+
+      const interval = 2;                   // metres between chevrons
+      for (let d = interval; d <= distance; d += interval) {
+        const waypoint = google.maps.geometry.spherical.computeOffset(origin, d, heading);
+        const wpVec    = latLonToVector(waypoint.lat(), waypoint.lng());
+
+        // Chevron geometry (cone)
+        const coneGeo = new THREE.ConeGeometry(0.30, 0.70, 6);
+        const coneMat = new THREE.MeshBasicMaterial({ color: 0x00e0ff });
+        const cone    = new THREE.Mesh(coneGeo, coneMat);
+        cone.position.copy(wpVec);
+
+        // Point the cone towards the next waypoint / destination
+        cone.lookAt(new THREE.Vector3().copy(wpVec).add(new THREE.Vector3().subVectors(wpVec, latLonToVector(startLat, startLon)).normalize()));
+
+        chevronGroup.add(cone);
+      }
+      scene.add(chevronGroup);
+    };
+
+    // ---------------------------------------------------------------------------
+    // ↳ Three.js + WebXR setup
+    // ---------------------------------------------------------------------------
+    const initThree = () => {
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera();
+      scene.add(camera);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      // WebXR AR button (with DOM overlay so UI stays visible)
+      document.body.appendChild(
+        ARButton.createButton(renderer, {
+          requiredFeatures: ['local-floor', 'hit-test', 'dom-overlay'],
+          domOverlay: { root: document.body }
+        })
+      );
+
+      renderer.setAnimationLoop(render);
+    };
+
+    // ---------------------------------------------------------------------------
+    // ↳ Render loop
+    // ---------------------------------------------------------------------------
+    const render = (t, frame) => {
+      // (Optional) Per‑frame logic can be added here
+      renderer.render(scene, camera);
+    };
+
+    // ---------------------------------------------------------------------------
+    // ↳ Geolocation
+    // ---------------------------------------------------------------------------
+    const watchUserPosition = () => {
+      if (!navigator.geolocation) {
+        alert('Geolocation not supported on this device/browser');
+        return;
+      }
+
+      navigator.geolocation.watchPosition(
+        pos => {
+          if (startLat === undefined) {
+            // First fix ⇒ set it as origin
+            startLat = pos.coords.latitude;
+            startLon = pos.coords.longitude;
+            metersPerDegLat = 110540;                               // ≈ constant
+            metersPerDegLon = 111320 * Math.cos(startLat * Math.PI / 180);
           }
-        });
-      </script>
+          // In a full‑app you’d translate the camera based on GPS drift here
+        },
+        err => console.error(err),
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
+    };
 
-      <a-entity waypoints-manager></a-entity>
-      <a-camera gps-camera rotation-reader></a-camera>
-    </a-scene>
-  </body>
+    // ---------------------------------------------------------------------------
+    // ↳ UI events
+    // ---------------------------------------------------------------------------
+    goBtn.addEventListener('click', () => {
+      if (startLat === undefined) {
+        alert('Waiting for initial GPS fix …');
+        return;
+      }
+
+      destLat = parseFloat(destLatInput.value);
+      destLon = parseFloat(destLonInput.value);
+
+      if (isNaN(destLat) || isNaN(destLon)) {
+        alert('Please enter valid decimal coordinates for the destination.');
+        return;
+      }
+
+      buildChevrons();
+    });
+
+    // ---------------------------------------------------------------------------
+    // ↳ Kick everything off!
+    // ---------------------------------------------------------------------------
+    window.addEventListener('load', () => {
+      initThree();
+      watchUserPosition();
+    });
+  </script> 
+</body>
 </html>
