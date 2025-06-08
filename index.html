@@ -1,9 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AR Navigation</title>
+
+  <!-- ───── Three / WebXR import map ──────────────────────────────── -->
   <script type="importmap">
     {
       "imports": {
@@ -12,320 +14,254 @@
       }
     }
   </script>
+
+  <!-- ───── Basic styles ──────────────────────────────────────────── -->
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      font-family: Arial, sans-serif;
-    }
+    body { margin:0; overflow:hidden; font-family:Arial, sans-serif; }
     #enter-ar {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      z-index: 999;
-      padding: 12px 24px;
-      background: #007bff;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 16px;
+      position:absolute; top:10px; left:10px; z-index:999;
+      padding:12px 24px; background:#007bff; color:#fff;
+      border:none; border-radius:4px; cursor:pointer; font-size:16px;
     }
-    #enter-ar:hover {
-      background: #0056b3;
-    }
+    #enter-ar:hover { background:#0056b3; }
     #loading {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(0,0,0,0.8);
-      color: white;
-      padding: 20px;
-      border-radius: 8px;
-      display: none;
-      text-align: center;
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      background:rgba(0,0,0,.8); color:#fff; padding:20px; border-radius:8px;
+      display:none; text-align:center;
     }
     #debug {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      background: rgba(0,0,0,0.7);
-      color: white;
-      padding: 10px;
-      font-size: 12px;
-      border-radius: 4px;
-      max-width: 80%;
-      word-wrap: break-word;
-      display: none;
+      position:absolute; bottom:10px; left:10px;
+      background:rgba(0,0,0,.7); color:#fff; padding:10px; font-size:12px;
+      border-radius:4px; max-width:80%; word-wrap:break-word; display:none;
     }
     #orientation {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      background: rgba(0,0,0,0.7);
-      color: white;
-      padding: 10px;
-      font-size: 14px;
-      border-radius: 4px;
-      display: none;
+      position:absolute; top:10px; right:10px;
+      background:rgba(0,0,0,.7); color:#fff; padding:10px; font-size:14px;
+      border-radius:4px; display:none;
     }
   </style>
 </head>
+
 <body>
-  <button id="enter-ar">Enter AR</button>
-  <div id="loading">Loading navigation...</div>
+  <button id="enter-ar">Enter AR</button>
+  <div id="loading">Loading navigation…</div>
   <div id="debug"></div>
   <div id="orientation"></div>
-	<script type="module">
-  import * as THREE from 'three';
-  import { ARButton } from 'three/addons/webxr/ARButton.js';
 
-  /**********************  BASIC THREE / WEB‑XR SET‑UP  **********************/
-  const scene   = new THREE.Scene();
-  const camera  = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 20);
-  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-  renderer.setPixelRatio(devicePixelRatio);
-  renderer.setSize(innerWidth, innerHeight);
-  renderer.xr.enabled = true;
-  document.body.appendChild(renderer.domElement);
+  <!-- ───── AR logic ──────────────────────────────────────────────── -->
+  <script type="module">
+    import * as THREE            from 'three';
+    import { ARButton }          from 'three/addons/webxr/ARButton.js';
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
-  const dirLight = new THREE.DirectionalLight(0xffffff, .8);
-  dirLight.position.set(0,10,0);
-  scene.add(dirLight);
+    /***************  Basic Three + WebXR setup  ********************/
+    const scene    = new THREE.Scene();
+    const camera   = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 20);
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+    renderer.setPixelRatio(devicePixelRatio);
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
 
-  const debugEl       = document.getElementById('debug');
-  const orientEl      = document.getElementById('orientation');
-  const loadingEl     = document.getElementById('loading');
-  const log = m => { console.log(m); debugEl.style.display='block'; debugEl.textContent += m+'\n'; };
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
+    const dirLight = new THREE.DirectionalLight(0xffffff, .8);
+    dirLight.position.set(0,10,0);
+    scene.add(dirLight);
 
-  /**********************  DEVICE SENSORS  **********************************/
-  /* Compass -------------------------------------------------------------- */
-  let deviceHeading = 0;          // degrees   (0 ≈ North, CW)
-  if ('DeviceOrientationEvent' in window) {
-    window.addEventListener('deviceorientation', e=>{
-      if (e.alpha != null) { deviceHeading = e.alpha; orientEl.textContent = `Heading: ${Math.round(deviceHeading)}°`; orientEl.style.display='block'; }
-    }, true);
-  } else { log('⚠️ DeviceOrientation not supported'); }
+    const debugEl  = document.getElementById('debug');
+    const orientEl = document.getElementById('orientation');
+    const loadEl   = document.getElementById('loading');
+    const log = m=>{ console.log(m); debugEl.style.display='block'; debugEl.textContent+=m+'\n'; };
 
-  /* Geolocation ---------------------------------------------------------- */
-  let userPos = null;             // {lat,lng}
-  if ('geolocation' in navigator) {
-    navigator.geolocation.watchPosition(
-      ({coords}) => userPos = { lat: coords.latitude, lng: coords.longitude },
-      err       => log(`Geolocation error: ${err.message}`),
-      { enableHighAccuracy:true, maximumAge:1000, timeout:10000 }
-    );
-  } else { log('⚠️ Geolocation not supported'); }
+    /***************  Device sensors  ********************************/
+    let deviceHeading = 0;        // clockwise degrees from North
+    if ('DeviceOrientationEvent' in window) {
+      window.addEventListener('deviceorientation', e=>{
+        if (e.alpha!=null){
+          deviceHeading = e.alpha;
+          orientEl.style.display='block';
+          orientEl.textContent = `Heading: ${Math.round(deviceHeading)}°`;
+        }
+      }, true);
+    }
 
-  /**********************  GEO HELPERS  ************************************/
-  const R = 6371000; // metres
-  const toRad = d=>d*Math.PI/180;
+    let userPos=null;
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(
+        ({coords})=>{ userPos={lat:coords.latitude,lng:coords.longitude}; },
+        err=>log('Geolocation error '+err.message),
+        {enableHighAccuracy:true, maximumAge:1e3, timeout:1e4}
+      );
+    }
 
-  function bearingBetween(lat1, lon1, lat2, lon2){
-    const φ1 = toRad(lat1), φ2 = toRad(lat2);
-    const Δλ = toRad(lon2 - lon1);
-    const y  = Math.sin(Δλ) * Math.cos(φ2);
-    const x  = Math.cos(φ1)*Math.sin(φ2) -
-               Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
-    return (Math.atan2(y,x)*180/Math.PI + 360) % 360; // degrees CW from North
-  }
+    /***************  Geo helpers  ***********************************/
+    const R = 6371000;
+    const toRad = d=>d*Math.PI/180;
+    function bearingBetween(lat1,lon1,lat2,lon2){
+      const φ1=toRad(lat1), φ2=toRad(lat2), Δλ=toRad(lon2-lon1);
+      const y=Math.sin(Δλ)*Math.cos(φ2);
+      const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+      return (Math.atan2(y,x)*180/Math.PI+360)%360;
+    }
+    function relativeXZ(fromLat,fromLon,toLat,toLon){
+      const φm = toRad((fromLat+toLat)/2);
+      return {
+        x: R*toRad(toLon-fromLon)*Math.cos(φm),   // east (+x)
+        z: R*toRad(toLat-fromLat)                 // north (-z forward)
+      };
+    }
 
-  function relativeXZ(fromLat, fromLon, toLat, toLon){
-    const φm = toRad((fromLat+toLat)/2);
-    return {
-      x :  R * toRad(toLon - fromLon) * Math.cos(φm), // East‑West (X)
-      z :  R * toRad(toLat - fromLat)                // North‑South (Z)
+    /***************  Visual builders  *******************************/
+    function makeArrow(scale=1){
+      const s=new THREE.Shape().moveTo(-.5,-.5).lineTo(0,.5).lineTo(.5,-.5).lineTo(-.5,-.5);
+      const g=new THREE.ShapeGeometry(s);
+      const m=new THREE.MeshStandardMaterial({color:0xffff00,emissive:0xffff00,emissiveIntensity:.5,transparent:true,opacity:.9,side:THREE.DoubleSide});
+      const mesh=new THREE.Mesh(g,m);
+      mesh.rotation.x=-Math.PI/2;
+      mesh.scale.setScalar(.3*scale);
+      return mesh;
+    }
+    function makeDestPin(){
+      const g=new THREE.Group();
+      const mat=new THREE.MeshStandardMaterial({color:0xb01020,emissive:0xb01020,emissiveIntensity:.4});
+      const top=new THREE.Mesh(new THREE.CylinderGeometry(.4,.3,.6,6),mat);
+      const inner=new THREE.Mesh(new THREE.CylinderGeometry(.15,.15,.1,6),new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:.3}));
+      inner.position.y=.31;
+      const tip=new THREE.Mesh(new THREE.ConeGeometry(.1,.4,16),mat); tip.position.y=-.4;
+      g.add(top,inner,tip); g.position.y=1; return g;
+    }
+
+    /***************  Route handling  ********************************/
+    const pathGroup = new THREE.Group(); scene.add(pathGroup);
+    let finalWP=null, scaleF=1;
+
+    async function loadWaypoints(){
+      const id=new URLSearchParams(location.search).get('routeId');
+      if(!id){ log('No routeId in URL'); return[];}
+      const res=await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${id}`);
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j=await res.json();
+      const w=j.waypoints||j.data?.waypoints||[];
+      log(`Loaded ${w.length} waypoints from server`); return w;
+    }
+
+    async function initWaypoints(){
+      loadEl.style.display='block'; debugEl.textContent='';
+      try{
+        const wps=await loadWaypoints(); if(!wps.length) throw new Error('Empty waypoint list');
+
+        /* distance‑based thinning (≥5 m) */
+        const kept=[]; wps.forEach(w=>{
+          if(!kept.length){kept.push(w);return;}
+          const last=kept[kept.length-1];
+          const d=Math.hypot(...Object.values(relativeXZ(last.lat,last.lng,w.lat,w.lng)));
+          if(d>5) kept.push(w);
+        });
+
+        /* dynamic scale so furthest ≈20 m in XR units */
+        let far=0;
+        kept.forEach(w=>{
+          const Δ=relativeXZ(kept[0].lat,kept[0].lng,w.lat,w.lng);
+          far=Math.max(far,Math.hypot(Δ.x,Δ.z));
+        });
+        scaleF = far?20/far:1;
+
+        /* purge previous and rebuild */
+        pathGroup.clear();
+
+        /* destination pin */
+        finalWP = kept[kept.length-1];
+        const pin = makeDestPin(); pin.name='destPin'; pathGroup.add(pin);
+
+        /* arrows */
+        for(let i=0;i<kept.length-1;i++){
+          const A=kept[i], B=kept[i+1];
+          const seg=relativeXZ(A.lat,A.lng,B.lat,B.lng);
+          const len=Math.hypot(seg.x,seg.z);
+          const bearing=Math.atan2(seg.x,seg.z);
+          const every=5, n=Math.max(3,Math.floor(len/every));
+          for(let j=0;j<n;j++){
+            const t=j/n;
+            const pos={x:seg.x*t,z:seg.z*t};
+            const arrow=makeArrow(1+.5*t);
+            arrow.position.set(pos.x*scaleF,0,pos.z*scaleF);
+            arrow.rotation.y=-bearing;
+            pathGroup.add(arrow);
+          }
+        }
+
+        pathGroup.userData.routeBearing = kept.length>1
+          ? bearingBetween(kept[0].lat,kept[0].lng, kept[1].lat,kept[1].lng)
+          : 0;
+
+        loadEl.style.display='none';
+      }catch(e){
+        log('Error initializing waypoints: '+e.message);
+        loadEl.textContent='Error: '+e.message;
+      }
+    }
+
+    /***************  Start AR session  *******************************/
+    let reticle;
+    async function startAR(){
+      if(!('xr' in navigator)) return alert('WebXR unsupported');
+      if(!await navigator.xr.isSessionSupported('immersive-ar')) return alert('AR not supported');
+
+      reticle=new THREE.Mesh(
+        new THREE.RingGeometry(.15,.2,32).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({transparent:true,opacity:.5})
+      ); reticle.visible=false; scene.add(reticle);
+
+      document.body.appendChild(ARButton.createButton(renderer,{
+        requiredFeatures:['hit-test'],
+        optionalFeatures:['dom-overlay'],
+        domOverlay:{root:document.body}
+      }));
+
+      let hitSrc=null, refSpace=null;
+      renderer.xr.addEventListener('sessionstart', ()=>{
+        const s=renderer.xr.getSession();
+        s.requestReferenceSpace('viewer').then(vrs=>{
+          refSpace=vrs;
+          s.requestHitTestSource({space:vrs}).then(src=>hitSrc=src);
+        });
+      });
+
+      renderer.setAnimationLoop((t,f)=>{
+        if(f&&hitSrc&&refSpace){
+          const hits=f.getHitTestResults(hitSrc);
+          if(hits.length){
+            reticle.visible=true;
+            reticle.matrix.fromArray(hits[0].getPose(refSpace).transform.matrix);
+          }else reticle.visible=false;
+        }
+
+        /* update dest pin position continuously */
+        const pin=pathGroup.getObjectByName('destPin');
+        if(pin&&userPos&&finalWP){
+          const rel=relativeXZ(userPos.lat,userPos.lng, finalWP.lat,finalWP.lng);
+          pin.position.set(rel.x*scaleF,0,rel.z*scaleF);
+        }
+
+        /* rotate entire path by heading difference */
+        const yaw = THREE.MathUtils.degToRad(deviceHeading - (pathGroup.userData.routeBearing||0));
+        pathGroup.rotation.y = -yaw;
+
+        renderer.render(scene,camera);
+      });
+    }
+
+    /***************  UI hooks  *****************************************/
+    document.getElementById('enter-ar').onclick = async()=>{
+      await startAR();
+      await initWaypoints();
+      document.getElementById('enter-ar').style.display='none';
     };
-  }
-
-  /**********************  VISUAL BUILDERS  *********************************/
-  function createRoadArrow(scale=1){
-    const shape = new THREE.Shape()
-      .moveTo(-0.5, -0.5).lineTo(0,0.5).lineTo(0.5,-0.5).lineTo(-0.5,-0.5);
-    const geo  = new THREE.ShapeGeometry(shape);
-    const mat  = new THREE.MeshStandardMaterial({ color:0xffff00, emissive:0xffff00, emissiveIntensity:.5, transparent:true, opacity:.9, side:THREE.DoubleSide });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.rotation.x = -Math.PI/2;
-    mesh.scale.setScalar(.3*scale);
-    return mesh;
-  }
-
-  function createDestinationMarker(){
-    const group = new THREE.Group();
-    const pinMat = new THREE.MeshStandardMaterial({ color:0xb01020, emissive:0xb01020, emissiveIntensity:.4 });
-
-    const top   = new THREE.Mesh(new THREE.CylinderGeometry(.4,.3,.6,6), pinMat);
-    const inner = new THREE.Mesh(new THREE.CylinderGeometry(.15,.15,.1,6), new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xffffff, emissiveIntensity:.3}));
-    inner.position.y = .31;
-
-    const tip   = new THREE.Mesh(new THREE.ConeGeometry(.1,.4,16), pinMat);
-    tip.position.y = -.4;
-
-    group.add(top, inner, tip);
-    group.position.y = 1; // 1 m above ground
-    return group;
-  }
-
-  /**********************  ROUTE & WAYPOINTS  *******************************/
-  let finalWaypoint   = null;      // full {lat,lng}
-  let scaleFactor     = 1;         // metres → XR units
-  const pathGroup     = new THREE.Group(); // everything we draw
-  scene.add(pathGroup);
-
-  async function loadWaypoints(){
-    const routeId = new URLSearchParams(location.search).get('routeId');
-    if(!routeId){ log('No routeId query parameter.'); return []; }
-    const res  = await fetch(`https://waypoints-prht.onrender.com/get-waypoints/${routeId}`);
-    const json = await res.json();
-    return json.waypoints ?? [];
-  }
-
-  async function initWaypoints(){
-    loadingEl.style.display='block'; debugEl.textContent='';
-    try{
-      const wps = await loadWaypoints();
-      if(!wps.length) throw new Error('No waypoints received.');
-
-      /* --------- distance‑based thinning (≥5 m apart) ------------------ */
-      const kept = [];
-      wps.forEach((wp,i)=>{
-        if(!wp.lat||!wp.lng) return;
-        if(!kept.length){ kept.push(wp); return; }
-        const last = kept[kept.length-1];
-        const d = THREE.MathUtils.euclideanDistance(
-          ...Object.values(relativeXZ(last.lat,last.lng,wp.lat,wp.lng))
-        );
-        if(d>5) kept.push(wp);
-      });
-      log(`Waypoints: ${wps.length} → kept ${kept.length}`);
-
-      /* --------- choose scale so farthest point sits ≈20 m ------------- */
-      let far = 0;
-      for(const wp of kept){
-        const Δ = relativeXZ(kept[0].lat, kept[0].lng, wp.lat, wp.lng);
-        far = Math.max(far, Math.sqrt(Δ.x**2 + Δ.z**2));
+    addEventListener('resize',()=>{
+      if(!renderer.xr.isPresenting){
+        camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth,innerHeight);
       }
-      scaleFactor = far>0 ? 20/far : 1;
-      log(`scaleFactor = ${scaleFactor.toFixed(3)} for furthest ${far.toFixed(1)} m`);
-
-      /* --------- build visuals inside pathGroup ------------------------ */
-      pathGroup.clear();
-
-      // destination pin (will be re‑positioned each frame)
-      finalWaypoint = kept[kept.length-1];
-      const destPin = createDestinationMarker();
-      pathGroup.add(destPin);
-      destPin.name = 'destPin';
-
-      // yellow arrows
-      for(let i=0;i<kept.length-1;i++){
-        const A = kept[i], B = kept[i+1];
-        const seg = relativeXZ(A.lat,A.lng,B.lat,B.lng);
-        const len = Math.sqrt(seg.x**2 + seg.z**2);
-        const bearing = Math.atan2(seg.x, seg.z); // radians from +Z
-
-        const arrowEvery = 5; // m
-        const nArrows = Math.max(3, Math.floor(len/arrowEvery));
-        for(let j=0;j<nArrows;j++){
-          const t = j/nArrows;
-          const posXZ = {
-            x: THREE.MathUtils.lerp(0, seg.x, t),
-            z: THREE.MathUtils.lerp(0, seg.z, t)
-          };
-          const arrow = createRoadArrow(1 + .5*t);          // grow nearer dest
-          arrow.position.set(posXZ.x*scaleFactor, 0, posXZ.z*scaleFactor);
-          arrow.rotation.y = -bearing;
-          pathGroup.add(arrow);
-        }
-      }
-
-      /* --------- store route bearing (1st → 2nd) for orientation --------*/
-      const brg = kept.length>1
-        ? bearingBetween(kept[0].lat, kept[0].lng, kept[1].lat, kept[1].lng)
-        : 0;
-      pathGroup.userData.routeBearing = brg; // degrees
-
-      loadingEl.style.display='none';
-    }catch(e){
-      log('initWaypoints error: '+e.message);
-      loadingEl.textContent = 'Error loading waypoints';
-    }
-  }
-
-  /**********************  AR ENTRY & MAIN LOOP  ****************************/
-  let reticle;
-  async function startAR(){
-    if(!('xr' in navigator)){ alert('WebXR not supported'); return; }
-    if(!await navigator.xr.isSessionSupported('immersive-ar')){ alert('AR not supported');return;}
-
-    reticle = new THREE.Mesh(
-      new THREE.RingGeometry(.15,.2,32).rotateX(-Math.PI/2),
-      new THREE.MeshBasicMaterial({transparent:true,opacity:.5})
-    );
-    reticle.visible = false;
-    scene.add(reticle);
-
-    document.body.appendChild(ARButton.createButton(renderer,{
-      requiredFeatures:['hit-test'],
-      optionalFeatures:['dom-overlay'],
-      domOverlay:{root:document.body}
-    }));
-
-    /* ---- one‑time geo + compass align once reticle found ------------- */
-    let hitSource=null, refSpace=null;
-    renderer.xr.addEventListener('sessionstart', ()=>{
-      const session=renderer.xr.getSession();
-      session.requestReferenceSpace('viewer').then(vrs=>{
-        refSpace=vrs;
-        session.requestHitTestSource({space:vrs}).then(src=>hitSource=src);
-      });
-      log('XR session started');
     });
-
-    renderer.setAnimationLoop((time,frame)=>{
-      /* ---- hit‑test (for reticle) ------------------------------------ */
-      if(frame && hitSource && refSpace){
-        const hits = frame.getHitTestResults(hitSource);
-        if(hits.length){
-          const pose = hits[0].getPose(refSpace);
-          reticle.matrix.fromArray(pose.transform.matrix);
-          reticle.visible = true;
-        }
-      }
-
-      /* ---- when we have userPos & finalWaypoint: update dest pin ----- */
-      const destPin = pathGroup.getObjectByName('destPin');
-      if(userPos && finalWaypoint && destPin){
-        const rel = relativeXZ(userPos.lat,userPos.lng, finalWaypoint.lat,finalWaypoint.lng);
-        destPin.position.set(rel.x*scaleFactor, 0, rel.z*scaleFactor);
-      }
-
-      /* ---- continuous compass alignment ------------------------------ */
-      const routeBearing = pathGroup.userData.routeBearing ?? 0;
-      const yawOffset    = THREE.MathUtils.degToRad(deviceHeading - routeBearing);
-      pathGroup.rotation.y = -yawOffset;  // negate because +Y is up
-
-      renderer.render(scene,camera);
-    });
-  }
-
-  /**********************  UI HOOKS  ***************************************/
-  document.getElementById('enter-ar').addEventListener('click', async ()=>{
-    await startAR();
-    await initWaypoints();
-    document.getElementById('enter-ar').style.display='none';
-  });
-
-  addEventListener('resize', ()=>{
-    if(!renderer.xr.isPresenting){
-      camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth,innerHeight);
-    }
-  });
-</script>
-
-  
+  </script>
 </body>
 </html>
